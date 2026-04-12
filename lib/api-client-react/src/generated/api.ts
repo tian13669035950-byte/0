@@ -5,18 +5,27 @@
  * API specification
  * OpenAPI spec version: 0.1.0
  */
-import { useQuery } from "@tanstack/react-query";
+import { useMutation, useQuery } from "@tanstack/react-query";
 import type {
+  MutationFunction,
   QueryFunction,
   QueryKey,
+  UseMutationOptions,
+  UseMutationResult,
   UseQueryOptions,
   UseQueryResult,
 } from "@tanstack/react-query";
 
-import type { HealthStatus } from "./api.schemas";
+import type {
+  ErrorResponse,
+  HealthStatus,
+  ScrapeHistoryItem,
+  ScrapeRequest,
+  ScrapeResult,
+} from "./api.schemas";
 
 import { customFetch } from "../custom-fetch";
-import type { ErrorType } from "../custom-fetch";
+import type { ErrorType, BodyType } from "../custom-fetch";
 
 type AwaitedInput<T> = PromiseLike<T> | T;
 
@@ -92,6 +101,169 @@ export function useHealthCheck<
   request?: SecondParameter<typeof customFetch>;
 }): UseQueryResult<TData, TError> & { queryKey: QueryKey } {
   const queryOptions = getHealthCheckQueryOptions(options);
+
+  const query = useQuery(queryOptions) as UseQueryResult<TData, TError> & {
+    queryKey: QueryKey;
+  };
+
+  return { ...query, queryKey: queryOptions.queryKey };
+}
+
+/**
+ * Launches a headless browser to scrape the given URL
+ * @summary Start a scraping job
+ */
+export const getStartScrapeUrl = () => {
+  return `/api/scrape`;
+};
+
+export const startScrape = async (
+  scrapeRequest: ScrapeRequest,
+  options?: RequestInit,
+): Promise<ScrapeResult> => {
+  return customFetch<ScrapeResult>(getStartScrapeUrl(), {
+    ...options,
+    method: "POST",
+    headers: { "Content-Type": "application/json", ...options?.headers },
+    body: JSON.stringify(scrapeRequest),
+  });
+};
+
+export const getStartScrapeMutationOptions = <
+  TError = ErrorType<ErrorResponse>,
+  TContext = unknown,
+>(options?: {
+  mutation?: UseMutationOptions<
+    Awaited<ReturnType<typeof startScrape>>,
+    TError,
+    { data: BodyType<ScrapeRequest> },
+    TContext
+  >;
+  request?: SecondParameter<typeof customFetch>;
+}): UseMutationOptions<
+  Awaited<ReturnType<typeof startScrape>>,
+  TError,
+  { data: BodyType<ScrapeRequest> },
+  TContext
+> => {
+  const mutationKey = ["startScrape"];
+  const { mutation: mutationOptions, request: requestOptions } = options
+    ? options.mutation &&
+      "mutationKey" in options.mutation &&
+      options.mutation.mutationKey
+      ? options
+      : { ...options, mutation: { ...options.mutation, mutationKey } }
+    : { mutation: { mutationKey }, request: undefined };
+
+  const mutationFn: MutationFunction<
+    Awaited<ReturnType<typeof startScrape>>,
+    { data: BodyType<ScrapeRequest> }
+  > = (props) => {
+    const { data } = props ?? {};
+
+    return startScrape(data, requestOptions);
+  };
+
+  return { mutationFn, ...mutationOptions };
+};
+
+export type StartScrapeMutationResult = NonNullable<
+  Awaited<ReturnType<typeof startScrape>>
+>;
+export type StartScrapeMutationBody = BodyType<ScrapeRequest>;
+export type StartScrapeMutationError = ErrorType<ErrorResponse>;
+
+/**
+ * @summary Start a scraping job
+ */
+export const useStartScrape = <
+  TError = ErrorType<ErrorResponse>,
+  TContext = unknown,
+>(options?: {
+  mutation?: UseMutationOptions<
+    Awaited<ReturnType<typeof startScrape>>,
+    TError,
+    { data: BodyType<ScrapeRequest> },
+    TContext
+  >;
+  request?: SecondParameter<typeof customFetch>;
+}): UseMutationResult<
+  Awaited<ReturnType<typeof startScrape>>,
+  TError,
+  { data: BodyType<ScrapeRequest> },
+  TContext
+> => {
+  return useMutation(getStartScrapeMutationOptions(options));
+};
+
+/**
+ * Returns a list of recent scraping jobs
+ * @summary Get scrape history
+ */
+export const getGetScrapeHistoryUrl = () => {
+  return `/api/scrape/history`;
+};
+
+export const getScrapeHistory = async (
+  options?: RequestInit,
+): Promise<ScrapeHistoryItem[]> => {
+  return customFetch<ScrapeHistoryItem[]>(getGetScrapeHistoryUrl(), {
+    ...options,
+    method: "GET",
+  });
+};
+
+export const getGetScrapeHistoryQueryKey = () => {
+  return [`/api/scrape/history`] as const;
+};
+
+export const getGetScrapeHistoryQueryOptions = <
+  TData = Awaited<ReturnType<typeof getScrapeHistory>>,
+  TError = ErrorType<unknown>,
+>(options?: {
+  query?: UseQueryOptions<
+    Awaited<ReturnType<typeof getScrapeHistory>>,
+    TError,
+    TData
+  >;
+  request?: SecondParameter<typeof customFetch>;
+}) => {
+  const { query: queryOptions, request: requestOptions } = options ?? {};
+
+  const queryKey = queryOptions?.queryKey ?? getGetScrapeHistoryQueryKey();
+
+  const queryFn: QueryFunction<
+    Awaited<ReturnType<typeof getScrapeHistory>>
+  > = ({ signal }) => getScrapeHistory({ signal, ...requestOptions });
+
+  return { queryKey, queryFn, ...queryOptions } as UseQueryOptions<
+    Awaited<ReturnType<typeof getScrapeHistory>>,
+    TError,
+    TData
+  > & { queryKey: QueryKey };
+};
+
+export type GetScrapeHistoryQueryResult = NonNullable<
+  Awaited<ReturnType<typeof getScrapeHistory>>
+>;
+export type GetScrapeHistoryQueryError = ErrorType<unknown>;
+
+/**
+ * @summary Get scrape history
+ */
+
+export function useGetScrapeHistory<
+  TData = Awaited<ReturnType<typeof getScrapeHistory>>,
+  TError = ErrorType<unknown>,
+>(options?: {
+  query?: UseQueryOptions<
+    Awaited<ReturnType<typeof getScrapeHistory>>,
+    TError,
+    TData
+  >;
+  request?: SecondParameter<typeof customFetch>;
+}): UseQueryResult<TData, TError> & { queryKey: QueryKey } {
+  const queryOptions = getGetScrapeHistoryQueryOptions(options);
 
   const query = useQuery(queryOptions) as UseQueryResult<TData, TError> & {
     queryKey: QueryKey;

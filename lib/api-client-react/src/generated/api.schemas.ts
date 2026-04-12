@@ -8,3 +8,65 @@
 export interface HealthStatus {
   status: string;
 }
+
+export interface ScrapeOptions {
+  headings: boolean;
+  links: boolean;
+  paragraphs: boolean;
+  images: boolean;
+  metaTags: boolean;
+}
+
+export interface ScrapeRequest {
+  /** URL to scrape */
+  url: string;
+  options: ScrapeOptions;
+}
+
+export interface Heading {
+  level: string;
+  text: string;
+}
+
+export interface Link {
+  text: string;
+  href: string;
+}
+
+export interface Image {
+  src: string;
+  alt: string;
+}
+
+export interface MetaTag {
+  name: string;
+  content: string;
+}
+
+export interface ScrapeResult {
+  id: string;
+  url: string;
+  title: string;
+  scrapedAt: string;
+  /** Time taken in milliseconds */
+  duration: number;
+  headings: Heading[];
+  links: Link[];
+  paragraphs: string[];
+  images: Image[];
+  metaTags: MetaTag[];
+}
+
+export interface ScrapeHistoryItem {
+  id: string;
+  url: string;
+  title: string;
+  scrapedAt: string;
+  duration: number;
+  itemCount: number;
+}
+
+export interface ErrorResponse {
+  error: string;
+  message: string;
+}

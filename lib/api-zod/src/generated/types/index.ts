@@ -6,4 +6,13 @@
  * OpenAPI spec version: 0.1.0
  */
 
+export * from "./errorResponse";
+export * from "./heading";
 export * from "./healthStatus";
+export * from "./image";
+export * from "./link";
+export * from "./metaTag";
+export * from "./scrapeHistoryItem";
+export * from "./scrapeOptions";
+export * from "./scrapeRequest";
+export * from "./scrapeResult";

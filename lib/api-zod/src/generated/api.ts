@@ -14,3 +14,65 @@ import * as zod from "zod";
 export const HealthCheckResponse = zod.object({
   status: zod.string(),
 });
+
+/**
+ * Launches a headless browser to scrape the given URL
+ * @summary Start a scraping job
+ */
+export const StartScrapeBody = zod.object({
+  url: zod.string().describe("URL to scrape"),
+  options: zod.object({
+    headings: zod.boolean(),
+    links: zod.boolean(),
+    paragraphs: zod.boolean(),
+    images: zod.boolean(),
+    metaTags: zod.boolean(),
+  }),
+});
+
+export const StartScrapeResponse = zod.object({
+  id: zod.string(),
+  url: zod.string(),
+  title: zod.string(),
+  scrapedAt: zod.string(),
+  duration: zod.number().describe("Time taken in milliseconds"),
+  headings: zod.array(
+    zod.object({
+      level: zod.string(),
+      text: zod.string(),
+    }),
+  ),
+  links: zod.array(
+    zod.object({
+      text: zod.string(),
+      href: zod.string(),
+    }),
+  ),
+  paragraphs: zod.array(zod.string()),
+  images: zod.array(
+    zod.object({
+      src: zod.string(),
+      alt: zod.string(),
+    }),
+  ),
+  metaTags: zod.array(
+    zod.object({
+      name: zod.string(),
+      content: zod.string(),
+    }),
+  ),
+});
+
+/**
+ * Returns a list of recent scraping jobs
+ * @summary Get scrape history
+ */
+export const GetScrapeHistoryResponseItem = zod.object({
+  id: zod.string(),
+  url: zod.string(),
+  title: zod.string(),
+  scrapedAt: zod.string(),
+  duration: zod.number(),
+  itemCount: zod.number(),
+});
+export const GetScrapeHistoryResponse = zod.array(GetScrapeHistoryResponseItem);

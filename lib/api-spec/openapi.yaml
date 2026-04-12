@@ -1,6 +1,5 @@
 openapi: 3.1.0
 info:
-  # Do not change the title, if the title changes, the import paths will be broken
   title: Api
   version: 0.1.0
   description: API specification
@@ -10,6 +9,8 @@ servers:
 tags:
   - name: health
     description: Health operations
+  - name: scraper
+    description: Web scraping operations
 paths:
   /healthz:
     get:
@@ -24,6 +25,52 @@ paths:
             application/json:
               schema:
                 $ref: "#/components/schemas/HealthStatus"
+  /scrape:
+    post:
+      operationId: startScrape
+      tags: [scraper]
+      summary: Start a scraping job
+      description: Launches a headless browser to scrape the given URL
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              $ref: "#/components/schemas/ScrapeRequest"
+      responses:
+        "200":
+          description: Scraping completed
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/ScrapeResult"
+        "400":
+          description: Bad request
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/ErrorResponse"
+        "500":
+          description: Scraping failed
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/ErrorResponse"
+  /scrape/history:
+    get:
+      operationId: getScrapeHistory
+      tags: [scraper]
+      summary: Get scrape history
+      description: Returns a list of recent scraping jobs
+      responses:
+        "200":
+          description: List of scrape results
+          content:
+            application/json:
+              schema:
+                type: array
+                items:
+                  $ref: "#/components/schemas/ScrapeHistoryItem"
 components:
   schemas:
     HealthStatus:
@@ -33,4 +80,150 @@ components:
           type: string
       required:
         - status
-
+    ScrapeRequest:
+      type: object
+      properties:
+        url:
+          type: string
+          description: URL to scrape
+        options:
+          $ref: "#/components/schemas/ScrapeOptions"
+      required:
+        - url
+        - options
+    ScrapeOptions:
+      type: object
+      properties:
+        headings:
+          type: boolean
+        links:
+          type: boolean
+        paragraphs:
+          type: boolean
+        images:
+          type: boolean
+        metaTags:
+          type: boolean
+      required:
+        - headings
+        - links
+        - paragraphs
+        - images
+        - metaTags
+    ScrapeResult:
+      type: object
+      properties:
+        id:
+          type: string
+        url:
+          type: string
+        title:
+          type: string
+        scrapedAt:
+          type: string
+        duration:
+          type: number
+          description: Time taken in milliseconds
+        headings:
+          type: array
+          items:
+            $ref: "#/components/schemas/Heading"
+        links:
+          type: array
+          items:
+            $ref: "#/components/schemas/Link"
+        paragraphs:
+          type: array
+          items:
+            type: string
+        images:
+          type: array
+          items:
+            $ref: "#/components/schemas/Image"
+        metaTags:
+          type: array
+          items:
+            $ref: "#/components/schemas/MetaTag"
+      required:
+        - id
+        - url
+        - title
+        - scrapedAt
+        - duration
+        - headings
+        - links
+        - paragraphs
+        - images
+        - metaTags
+    Heading:
+      type: object
+      properties:
+        level:
+          type: string
+        text:
+          type: string
+      required:
+        - level
+        - text
+    Link:
+      type: object
+      properties:
+        text:
+          type: string
+        href:
+          type: string
+      required:
+        - text
+        - href
+    Image:
+      type: object
+      properties:
+        src:
+          type: string
+        alt:
+          type: string
+      required:
+        - src
+        - alt
+    MetaTag:
+      type: object
+      properties:
+        name:
+          type: string
+        content:
+          type: string
+      required:
+        - name
+        - content
+    ScrapeHistoryItem:
+      type: object
+      properties:
+        id:
+          type: string
+        url:
+          type: string
+        title:
+          type: string
+        scrapedAt:
+          type: string
+        duration:
+          type: number
+        itemCount:
+          type: number
+      required:
+        - id
+        - url
+        - title
+        - scrapedAt
+        - duration
+        - itemCount
+    ErrorResponse:
+      type: object
+      properties:
+        error:
+          type: string
+        message:
+          type: string
+      required:
+        - error
+        - message
