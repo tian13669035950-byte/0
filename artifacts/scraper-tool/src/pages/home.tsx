@@ -12,12 +12,14 @@ import { Tabs, TabsContent, TabsList, TabsTrigger } from "@/components/ui/tabs";
 import { Badge } from "@/components/ui/badge";
 import { ScrollArea } from "@/components/ui/scroll-area";
 import { Separator } from "@/components/ui/separator";
+import { Progress } from "@/components/ui/progress";
 import { useToast } from "@/hooks/use-toast";
 import {
   Globe, Type, Link as LinkIcon, AlignLeft, Image as ImageIcon, Code,
-  Activity, Search, AlertCircle, CheckCircle2, Play, Loader2,
+  Activity, Search, AlertCircle, CheckCircle2, Loader2,
   MousePointerClick, Plus, Trash2, Target, Crosshair, RefreshCw, Clock,
-  TrendingUp, ChevronDown, ChevronUp, ExternalLink,
+  TrendingUp, ChevronDown, ChevronUp, ExternalLink, Repeat, Square,
+  Play, SkipForward,
 } from "lucide-react";
 import type { ScrapeResult } from "@workspace/api-client-react/src/generated/api.schemas";
 
@@ -40,23 +42,35 @@ const formSchema = z.object({
   waitForPopupClose: z.boolean(),
   popupTimeoutMs: z.number().optional(),
   customSelectors: z.array(customSelectorSchema),
+  loopEnabled: z.boolean(),
+  loopCount: z.number().min(1).max(100),
+  loopDelayMs: z.number().min(0),
 });
 
 type FormValues = z.infer<typeof formSchema>;
 
 interface Snapshot {
   id: string;
+  iteration?: number;
+  loopTotal?: number;
   triggeredAt: string;
   duration: number;
   result: ScrapeResult;
 }
 
+function sleep(ms: number) {
+  return new Promise<void>((resolve) => setTimeout(resolve, ms));
+}
+
 export default function Home() {
   const { toast } = useToast();
-  const [latestResult, setLatestResult] = useState<ScrapeResult | null>(null);
   const [snapshots, setSnapshots] = useState<Snapshot[]>([]);
   const [triggerCount, setTriggerCount] = useState(0);
   const [expandedSnapshots, setExpandedSnapshots] = useState<Set<string>>(new Set());
+  const [loopRunning, setLoopRunning] = useState(false);
+  const [loopProgress, setLoopProgress] = useState<{ current: number; total: number } | null>(null);
+  const [singlePending, setSinglePending] = useState(false);
+  const stopLoopRef = useRef(false);
   const snapshotIdRef = useRef(0);
 
   const form = useForm<FormValues>({
@@ -69,52 +83,106 @@ export default function Home() {
       waitForPopupClose: false,
       popupTimeoutMs: 30000,
       customSelectors: [],
+      loopEnabled: false,
+      loopCount: 5,
+      loopDelayMs: 3000,
     },
   });
 
   const { fields, append, remove } = useFieldArray({ control: form.control, name: "customSelectors" });
 
-  const { mutate, isPending } = useStartScrape({
-    mutation: {
-      onSuccess: (data) => {
-        setLatestResult(data);
-        const snap: Snapshot = {
-          id: String(++snapshotIdRef.current),
-          triggeredAt: new Date().toLocaleTimeString("zh-CN", { hour12: false }),
-          duration: data.duration,
-          result: data,
-        };
-        setSnapshots((prev) => [snap, ...prev]);
-        setTriggerCount((c) => c + 1);
-        toast({ title: `第 ${triggerCount + 1} 次触发完成`, description: `耗时 ${data.duration}ms` });
-      },
-      onError: (error) => {
-        toast({ title: "触发失败", description: error.message || "发生未知错误", variant: "destructive" });
-      },
-    },
-  });
-
+  const { mutateAsync } = useStartScrape();
   const { data: health } = useHealthCheck({ query: { queryKey: getHealthCheckQueryKey() } });
 
-  const doScrape = useCallback(() => {
+  const buildRequestData = useCallback((values: FormValues) => ({
+    url: values.url,
+    options: {
+      ...values.options,
+      clickSelector: values.clickSelector || undefined,
+      clickWaitMs: values.clickWaitMs,
+      waitForPopupClose: values.waitForPopupClose || undefined,
+      popupTimeoutMs: values.popupTimeoutMs,
+      customSelectors: values.customSelectors.length > 0 ? values.customSelectors : undefined,
+    },
+  }), []);
+
+  const addSnapshot = useCallback((data: ScrapeResult, iteration?: number, loopTotal?: number) => {
+    const snap: Snapshot = {
+      id: String(++snapshotIdRef.current),
+      iteration,
+      loopTotal,
+      triggeredAt: new Date().toLocaleTimeString("zh-CN", { hour12: false }),
+      duration: data.duration,
+      result: data,
+    };
+    setSnapshots((prev) => [snap, ...prev]);
+    setTriggerCount((c) => c + 1);
+    return snap;
+  }, []);
+
+  const runSingle = useCallback(async () => {
     const values = form.getValues();
-    mutate({
-      data: {
-        url: values.url,
-        options: {
-          ...values.options,
-          clickSelector: values.clickSelector || undefined,
-          clickWaitMs: values.clickWaitMs,
-          waitForPopupClose: values.waitForPopupClose || undefined,
-          popupTimeoutMs: values.popupTimeoutMs,
-          customSelectors: values.customSelectors.length > 0 ? values.customSelectors : undefined,
-        },
-      },
+    setSinglePending(true);
+    try {
+      const data = await mutateAsync({ data: buildRequestData(values) });
+      addSnapshot(data);
+      toast({ title: "抓取完成", description: `耗时 ${data.duration}ms` });
+    } catch (err: unknown) {
+      const msg = err instanceof Error ? err.message : "未知错误";
+      toast({ title: "抓取失败", description: msg, variant: "destructive" });
+    } finally {
+      setSinglePending(false);
+    }
+  }, [form, mutateAsync, buildRequestData, addSnapshot, toast]);
+
+  const runLoop = useCallback(async () => {
+    const values = form.getValues();
+    const total = values.loopCount;
+    const delay = values.loopDelayMs;
+    stopLoopRef.current = false;
+    setLoopRunning(true);
+    setLoopProgress({ current: 0, total });
+
+    let successCount = 0;
+    let failCount = 0;
+
+    for (let i = 1; i <= total; i++) {
+      if (stopLoopRef.current) break;
+      setLoopProgress({ current: i, total });
+      try {
+        const data = await mutateAsync({ data: buildRequestData(values) });
+        addSnapshot(data, i, total);
+        successCount++;
+      } catch (err: unknown) {
+        failCount++;
+        const msg = err instanceof Error ? err.message : "未知错误";
+        toast({ title: `第 ${i} 次失败`, description: msg, variant: "destructive" });
+      }
+      if (i < total && !stopLoopRef.current) {
+        await sleep(delay);
+      }
+    }
+
+    setLoopRunning(false);
+    setLoopProgress(null);
+    const stopped = stopLoopRef.current;
+    toast({
+      title: stopped ? "循环已停止" : "循环完成",
+      description: `成功 ${successCount} 次${failCount > 0 ? `，失败 ${failCount} 次` : ""}`,
     });
-  }, [form, mutate]);
+  }, [form, mutateAsync, buildRequestData, addSnapshot, toast]);
+
+  const stopLoop = () => {
+    stopLoopRef.current = true;
+  };
 
   function onSubmit() {
-    doScrape();
+    const values = form.getValues();
+    if (values.loopEnabled) {
+      runLoop();
+    } else {
+      runSingle();
+    }
   }
 
   const toggleSnapshot = (id: string) => {
@@ -127,10 +195,11 @@ export default function Home() {
 
   const clearHistory = () => {
     setSnapshots([]);
-    setLatestResult(null);
     setTriggerCount(0);
   };
 
+  const isRunning = loopRunning || singlePending;
+  const loopEnabled = form.watch("loopEnabled");
   const hasCustomSelectors = form.watch("customSelectors").length > 0;
 
   return (
@@ -171,7 +240,7 @@ export default function Home() {
                     <MousePointerClick className="h-4 w-4 text-primary" />刷新按钮（可选）
                   </CardTitle>
                   <CardDescription className="text-xs">
-                    填写网页上"刷新"按钮的 CSS 选择器，每次触发时浏览器会自动点击它，等待数据更新后再抓取
+                    填写网页上"刷新"按钮的 CSS 选择器，每次抓取前浏览器会自动点击它
                   </CardDescription>
                 </CardHeader>
                 <CardContent className="space-y-3">
@@ -192,9 +261,7 @@ export default function Home() {
                       </FormControl>
                     </FormItem>
                   )} />
-
                   <Separator />
-
                   <FormField control={form.control} name="waitForPopupClose" render={({ field }) => (
                     <FormItem className="flex items-start gap-3 rounded border p-3 bg-amber-50/50 border-amber-200/60">
                       <FormControl>
@@ -202,16 +269,14 @@ export default function Home() {
                       </FormControl>
                       <div className="space-y-1">
                         <FormLabel className="font-medium cursor-pointer flex items-center gap-1.5 text-sm m-0">
-                          <ExternalLink className="h-3.5 w-3.5 text-amber-600" />
-                          会弹出后台窗口
+                          <ExternalLink className="h-3.5 w-3.5 text-amber-600" />会弹出后台窗口
                         </FormLabel>
                         <p className="text-xs text-muted-foreground leading-relaxed">
-                          勾选后，工具会自动监听弹出的后台窗口，等它自动关闭之后，再抓取主页面的最新数据
+                          点击后会弹出后台窗口，等它自动关闭后再抓取主页面数据
                         </p>
                       </div>
                     </FormItem>
                   )} />
-
                   {form.watch("waitForPopupClose") && (
                     <FormField control={form.control} name="popupTimeoutMs" render={({ field }) => (
                       <FormItem>
@@ -220,7 +285,7 @@ export default function Home() {
                           <Input type="number" placeholder="30000" className="font-mono text-xs" {...field}
                             onChange={e => field.onChange(Number(e.target.value))} />
                         </FormControl>
-                        <p className="text-xs text-muted-foreground">默认 30 秒，超时会自动用固定等待时间兜底</p>
+                        <p className="text-xs text-muted-foreground">超时自动用固定等待时间兜底</p>
                       </FormItem>
                     )} />
                   )}
@@ -231,10 +296,10 @@ export default function Home() {
               <Card className="border-border/50 shadow-sm">
                 <CardHeader className="pb-3">
                   <CardTitle className="flex items-center gap-2 text-base">
-                    <Crosshair className="h-4 w-4 text-primary" />要监控的数据
+                    <Crosshair className="h-4 w-4 text-primary" />要抓取的数据
                   </CardTitle>
                   <CardDescription className="text-xs">
-                    添加你想跟踪的数据位置，每次触发都会记录这些值的变化
+                    指定你想要的数据位置，每次循环都会提取这些值
                   </CardDescription>
                 </CardHeader>
                 <CardContent className="space-y-3">
@@ -245,7 +310,7 @@ export default function Home() {
                           render={({ field }) => (
                             <FormItem>
                               <FormControl>
-                                <Input placeholder="名称（如：最新消息、价格）" className="text-xs h-7" {...field} />
+                                <Input placeholder="名称（如：最新消息）" className="text-xs h-7" {...field} />
                               </FormControl>
                               <FormMessage className="text-xs" />
                             </FormItem>
@@ -254,7 +319,7 @@ export default function Home() {
                           render={({ field }) => (
                             <FormItem>
                               <FormControl>
-                                <Input placeholder="CSS选择器（如：.msg-title）" className="font-mono text-xs h-7" {...field} />
+                                <Input placeholder="CSS选择器" className="font-mono text-xs h-7" {...field} />
                               </FormControl>
                               <FormMessage className="text-xs" />
                             </FormItem>
@@ -270,8 +335,57 @@ export default function Home() {
                   <Button type="button" variant="outline" size="sm"
                     className="w-full text-xs h-8 border-dashed"
                     onClick={() => append({ name: "", selector: "" })}>
-                    <Plus className="h-3.5 w-3.5 mr-1.5" />添加监控项
+                    <Plus className="h-3.5 w-3.5 mr-1.5" />添加数据项
                   </Button>
+                </CardContent>
+              </Card>
+
+              {/* Loop settings */}
+              <Card className="border-border/50 shadow-sm">
+                <CardHeader className="pb-3">
+                  <CardTitle className="flex items-center gap-2 text-base">
+                    <Repeat className="h-4 w-4 text-primary" />自定义循环
+                  </CardTitle>
+                </CardHeader>
+                <CardContent className="space-y-3">
+                  <FormField control={form.control} name="loopEnabled" render={({ field }) => (
+                    <FormItem className="flex items-center gap-3 rounded border p-3 hover:bg-muted/40 transition-colors">
+                      <FormControl>
+                        <Checkbox checked={field.value} onCheckedChange={field.onChange} />
+                      </FormControl>
+                      <FormLabel className="font-medium cursor-pointer text-sm m-0">启用循环模式</FormLabel>
+                    </FormItem>
+                  )} />
+                  {loopEnabled && (
+                    <div className="space-y-3 pt-1">
+                      <FormField control={form.control} name="loopCount" render={({ field }) => (
+                        <FormItem>
+                          <FormLabel className="text-xs text-muted-foreground">循环次数</FormLabel>
+                          <FormControl>
+                            <div className="flex items-center gap-2">
+                              <Input type="number" min={1} max={100} className="font-mono text-xs" {...field}
+                                onChange={e => field.onChange(Number(e.target.value))} />
+                              <span className="text-xs text-muted-foreground whitespace-nowrap">次</span>
+                            </div>
+                          </FormControl>
+                          <FormMessage />
+                        </FormItem>
+                      )} />
+                      <FormField control={form.control} name="loopDelayMs" render={({ field }) => (
+                        <FormItem>
+                          <FormLabel className="text-xs text-muted-foreground">每次间隔时间（毫秒）</FormLabel>
+                          <FormControl>
+                            <div className="flex items-center gap-2">
+                              <Input type="number" min={0} className="font-mono text-xs" {...field}
+                                onChange={e => field.onChange(Number(e.target.value))} />
+                              <span className="text-xs text-muted-foreground whitespace-nowrap">毫秒</span>
+                            </div>
+                          </FormControl>
+                          <p className="text-xs text-muted-foreground">两次抓取之间等待多久，0 表示立即执行下一次</p>
+                        </FormItem>
+                      )} />
+                    </div>
+                  )}
                 </CardContent>
               </Card>
 
@@ -325,16 +439,26 @@ export default function Home() {
                 </CardFooter>
               </Card>
 
-              {/* Trigger button */}
-              <Button type="submit" className="w-full" size="lg" disabled={isPending}>
-                {isPending ? (
-                  <><Loader2 className="mr-2 h-4 w-4 animate-spin" />正在执行抓取...</>
+              {/* Action buttons */}
+              <div className="flex gap-2">
+                {loopRunning ? (
+                  <Button type="button" variant="destructive" className="flex-1" size="lg" onClick={stopLoop}>
+                    <Square className="mr-2 h-4 w-4 fill-current" />停止循环
+                  </Button>
                 ) : (
-                  <><RefreshCw className="mr-2 h-4 w-4" />
-                    {triggerCount === 0 ? "开始第一次抓取" : `触发第 ${triggerCount + 1} 次抓取`}
-                  </>
+                  <Button type="submit" className="flex-1" size="lg" disabled={isRunning}>
+                    {singlePending ? (
+                      <><Loader2 className="mr-2 h-4 w-4 animate-spin" />正在抓取...</>
+                    ) : loopEnabled ? (
+                      <><Repeat className="mr-2 h-4 w-4" />开始循环抓取</>
+                    ) : (
+                      <><Play className="mr-2 h-4 w-4" />
+                        {triggerCount === 0 ? "开始抓取" : `触发第 ${triggerCount + 1} 次`}
+                      </>
+                    )}
+                  </Button>
                 )}
-              </Button>
+              </div>
             </form>
           </Form>
         </div>
@@ -342,17 +466,38 @@ export default function Home() {
         {/* RIGHT: Results */}
         <div className="lg:col-span-8 space-y-4">
 
+          {/* Loop progress bar */}
+          {loopProgress && (
+            <Card className="border-primary/30 bg-primary/5 shadow-sm animate-in fade-in">
+              <CardContent className="pt-4 pb-4 space-y-3">
+                <div className="flex items-center justify-between text-sm">
+                  <div className="flex items-center gap-2">
+                    <Loader2 className="h-4 w-4 animate-spin text-primary" />
+                    <span className="font-medium">
+                      循环进行中：第 {loopProgress.current} / {loopProgress.total} 次
+                    </span>
+                  </div>
+                  <span className="text-muted-foreground text-xs">
+                    {Math.round((loopProgress.current / loopProgress.total) * 100)}%
+                  </span>
+                </div>
+                <Progress value={(loopProgress.current / loopProgress.total) * 100} className="h-2" />
+                <p className="text-xs text-muted-foreground">点击"停止循环"可以随时中断，已收集的数据不会丢失</p>
+              </CardContent>
+            </Card>
+          )}
+
           {/* Status bar */}
-          {triggerCount > 0 && (
+          {triggerCount > 0 && !loopProgress && (
             <div className="flex items-center justify-between px-4 py-2.5 bg-muted/30 border rounded-lg text-sm animate-in fade-in">
               <div className="flex items-center gap-4">
                 <div className="flex items-center gap-2">
                   <div className="h-2 w-2 rounded-full bg-emerald-500" />
-                  <span className="font-medium">已触发 {triggerCount} 次</span>
+                  <span className="font-medium">共 {triggerCount} 条记录</span>
                 </div>
-                {latestResult && (
+                {snapshots[0] && (
                   <span className="text-muted-foreground text-xs">
-                    最后一次：{snapshots[0]?.triggeredAt} · {latestResult.duration}ms
+                    最后一次：{snapshots[0].triggeredAt} · {snapshots[0].duration}ms
                   </span>
                 )}
               </div>
@@ -362,21 +507,27 @@ export default function Home() {
             </div>
           )}
 
-          {/* Custom selector tracking — shows value changes across triggers */}
+          {/* Custom selector value tracking */}
           {hasCustomSelectors && snapshots.length > 0 && (
             <Card className="border-border/50 shadow-sm animate-in fade-in">
               <CardHeader className="pb-3">
                 <CardTitle className="flex items-center gap-2 text-base">
-                  <TrendingUp className="h-4 w-4 text-primary" />数据变化追踪
+                  <TrendingUp className="h-4 w-4 text-primary" />数据汇总
                 </CardTitle>
-                <CardDescription className="text-xs">每次触发后，自定义监控项的最新值</CardDescription>
+                <CardDescription className="text-xs">
+                  每次循环提取的自定义数据，按时间顺序展示变化
+                </CardDescription>
               </CardHeader>
               <CardContent>
                 <div className="space-y-3">
                   {form.getValues("customSelectors").map((cs, csIdx) => {
                     const allValues = snapshots.map((snap) => {
                       const cr = snap.result.customResults?.find((r) => r.selector === cs.selector);
-                      return { time: snap.triggeredAt, values: cr?.values ?? [] };
+                      return {
+                        time: snap.triggeredAt,
+                        iteration: snap.iteration,
+                        values: cr?.values ?? [],
+                      };
                     });
                     const latest = allValues[0];
                     const previous = allValues[1];
@@ -386,18 +537,21 @@ export default function Home() {
                     return (
                       <div key={csIdx} className="border rounded-md overflow-hidden">
                         <div className="flex items-center justify-between px-3 py-2 bg-muted/40 border-b">
-                          <div className="flex items-center gap-2">
-                            <Crosshair className="h-3.5 w-3.5 text-primary" />
+                          <div className="flex items-center gap-2 flex-wrap">
+                            <Crosshair className="h-3.5 w-3.5 text-primary shrink-0" />
                             <span className="font-medium text-sm">{cs.name}</span>
-                            <code className="text-xs font-mono text-muted-foreground bg-muted px-1.5 py-0.5 rounded">{cs.selector}</code>
+                            <code className="text-xs font-mono text-muted-foreground bg-muted px-1.5 py-0.5 rounded">
+                              {cs.selector}
+                            </code>
                           </div>
                           {hasChanged && (
-                            <Badge className="text-xs bg-amber-100 text-amber-700 border-amber-200">数据已变化</Badge>
+                            <Badge className="text-xs bg-amber-100 text-amber-700 border-amber-200 shrink-0">有变化</Badge>
                           )}
                         </div>
 
-                        {/* Latest value(s) */}
-                        <div className="px-3 py-2.5">
+                        {/* Latest value */}
+                        <div className="px-3 py-2.5 border-b">
+                          <p className="text-xs text-muted-foreground mb-1">最新值</p>
                           {latest?.values.length === 0 ? (
                             <span className="text-xs text-muted-foreground">未找到匹配内容</span>
                           ) : (
@@ -409,18 +563,23 @@ export default function Home() {
                           )}
                         </div>
 
-                        {/* History mini-table */}
+                        {/* History table */}
                         {allValues.length > 1 && (
-                          <div className="border-t px-3 py-2 bg-muted/10">
-                            <p className="text-xs text-muted-foreground mb-1.5">历史记录（最近 {allValues.length} 次）</p>
-                            <div className="space-y-1">
+                          <div className="px-3 py-2 bg-muted/10">
+                            <p className="text-xs text-muted-foreground mb-1.5">全部记录（{allValues.length} 次）</p>
+                            <div className="space-y-1 max-h-40 overflow-y-auto">
                               {allValues.map((entry, ei) => (
                                 <div key={ei} className="flex items-start gap-2 text-xs">
                                   <span className="text-muted-foreground font-mono w-16 shrink-0">{entry.time}</span>
+                                  {entry.iteration && (
+                                    <span className="text-muted-foreground shrink-0">#{entry.iteration}</span>
+                                  )}
                                   <span className={`font-mono ${ei === 0 ? "font-medium text-foreground" : "text-muted-foreground"}`}>
                                     {entry.values.length > 0 ? entry.values.join(" / ") : "—"}
                                   </span>
-                                  {ei === 0 && <Badge variant="outline" className="text-[10px] px-1 py-0 h-4 ml-auto">最新</Badge>}
+                                  {ei === 0 && (
+                                    <Badge variant="outline" className="text-[10px] px-1 py-0 h-4 ml-auto shrink-0">最新</Badge>
+                                  )}
                                 </div>
                               ))}
                             </div>
@@ -439,21 +598,22 @@ export default function Home() {
             <Card className="border-border/50 shadow-sm">
               <CardHeader className="pb-3">
                 <CardTitle className="flex items-center gap-2 text-base">
-                  <Clock className="h-4 w-4 text-primary" />触发记录
+                  <Clock className="h-4 w-4 text-primary" />全部记录
                 </CardTitle>
-                <CardDescription className="text-xs">每次手动触发的完整抓取结果</CardDescription>
+                <CardDescription className="text-xs">点击任意一条展开查看完整抓取内容</CardDescription>
               </CardHeader>
-              <CardContent className="space-y-3 p-0">
+              <CardContent className="space-y-0 p-0">
                 {snapshots.map((snap, idx) => {
                   const isExpanded = expandedSnapshots.has(snap.id);
                   const r = snap.result;
-                  const totalItems = (r.headings?.length || 0) + (r.links?.length || 0) +
-                    (r.paragraphs?.length || 0) + (r.images?.length || 0) + (r.metaTags?.length || 0) +
+                  const totalItems =
+                    (r.headings?.length || 0) + (r.links?.length || 0) +
+                    (r.paragraphs?.length || 0) + (r.images?.length || 0) +
+                    (r.metaTags?.length || 0) +
                     (r.customResults ?? []).reduce((s, cr) => s + cr.values.length, 0);
 
                   return (
                     <div key={snap.id} className={`border-t first:border-t-0 ${idx === 0 ? "bg-muted/10" : ""}`}>
-                      {/* Snapshot header — always visible */}
                       <button
                         type="button"
                         className="w-full flex items-center justify-between px-6 py-3 hover:bg-muted/20 transition-colors text-left"
@@ -462,22 +622,31 @@ export default function Home() {
                         <div className="flex items-center gap-3">
                           <div className={`h-2 w-2 rounded-full shrink-0 ${idx === 0 ? "bg-primary" : "bg-muted-foreground/30"}`} />
                           <div>
-                            <div className="flex items-center gap-2">
-                              <span className="font-medium text-sm">第 {snapshots.length - idx} 次触发</span>
-                              {idx === 0 && <Badge variant="outline" className="text-xs px-1.5 py-0 h-4">最新</Badge>}
+                            <div className="flex items-center gap-2 flex-wrap">
+                              {snap.iteration && snap.loopTotal ? (
+                                <span className="font-medium text-sm">第 {snap.iteration}/{snap.loopTotal} 次循环</span>
+                              ) : (
+                                <span className="font-medium text-sm">第 {snapshots.length - idx} 次触发</span>
+                              )}
+                              {idx === 0 && (
+                                <Badge variant="outline" className="text-xs px-1.5 py-0 h-4">最新</Badge>
+                              )}
                               {r.clickedElement && (
                                 <span className="flex items-center gap-1 text-xs text-emerald-600">
                                   <MousePointerClick className="h-3 w-3" />已点击刷新
                                 </span>
                               )}
                             </div>
-                            <div className="text-xs text-muted-foreground mt-0.5">{snap.triggeredAt} · {snap.duration}ms · {totalItems} 项</div>
+                            <div className="text-xs text-muted-foreground mt-0.5">
+                              {snap.triggeredAt} · {snap.duration}ms · {totalItems} 项
+                            </div>
                           </div>
                         </div>
-                        {isExpanded ? <ChevronUp className="h-4 w-4 text-muted-foreground" /> : <ChevronDown className="h-4 w-4 text-muted-foreground" />}
+                        {isExpanded
+                          ? <ChevronUp className="h-4 w-4 text-muted-foreground shrink-0" />
+                          : <ChevronDown className="h-4 w-4 text-muted-foreground shrink-0" />}
                       </button>
 
-                      {/* Expanded detail */}
                       {isExpanded && (
                         <div className="px-6 pb-4 animate-in fade-in slide-in-from-top-2 duration-200">
                           <Tabs defaultValue={r.customResults && r.customResults.length > 0 ? "custom" : "headings"}>
@@ -485,7 +654,10 @@ export default function Home() {
                               <TabsList className="h-9 w-max bg-transparent p-0 flex">
                                 {r.customResults && r.customResults.length > 0 && (
                                   <TabsTrigger value="custom" className="data-[state=active]:border-b-2 data-[state=active]:border-primary data-[state=active]:bg-transparent data-[state=active]:shadow-none rounded-none px-3 text-xs whitespace-nowrap">
-                                    自定义 <Badge variant="secondary" className="ml-1.5 font-mono text-xs">{r.customResults.reduce((s, cr) => s + cr.values.length, 0)}</Badge>
+                                    自定义{" "}
+                                    <Badge variant="secondary" className="ml-1.5 font-mono text-xs">
+                                      {r.customResults.reduce((s, cr) => s + cr.values.length, 0)}
+                                    </Badge>
                                   </TabsTrigger>
                                 )}
                                 <TabsTrigger value="headings" className="data-[state=active]:border-b-2 data-[state=active]:border-primary data-[state=active]:bg-transparent data-[state=active]:shadow-none rounded-none px-3 text-xs whitespace-nowrap">
@@ -530,7 +702,8 @@ export default function Home() {
                                 {r.links.length === 0 ? <EmptyState message="无链接" /> : r.links.map((l, i) => (
                                   <div key={i} className="p-2.5 rounded bg-muted/30 border text-xs">
                                     <div className="font-medium">{l.text}</div>
-                                    <a href={l.href} target="_blank" rel="noreferrer" className="text-primary hover:underline font-mono truncate block">{l.href}</a>
+                                    <a href={l.href} target="_blank" rel="noreferrer"
+                                      className="text-primary hover:underline font-mono truncate block">{l.href}</a>
                                   </div>
                                 ))}
                               </TabsContent>
@@ -549,29 +722,29 @@ export default function Home() {
               </CardContent>
             </Card>
           ) : (
-            !isPending && (
+            !isRunning && (
               <div className="flex flex-col items-center justify-center text-muted-foreground border-2 border-dashed rounded-lg bg-muted/5 p-12 text-center">
                 <div className="w-16 h-16 rounded-full bg-muted flex items-center justify-center mb-4">
-                  <RefreshCw className="h-8 w-8 opacity-40" />
+                  <Repeat className="h-8 w-8 opacity-40" />
                 </div>
-                <h3 className="text-lg font-medium text-foreground mb-2">等待第一次触发</h3>
+                <h3 className="text-lg font-medium text-foreground mb-2">配置好循环，一键运行</h3>
                 <p className="text-sm max-w-sm mb-6">
-                  配置好刷新按钮选择器和要监控的数据后，每次点击"触发抓取"，工具会自动点击网页刷新、等待数据更新，再把最新内容记录下来。
+                  设置循环次数和间隔，工具会自动重复执行：点击刷新按钮 → 等待数据更新 → 抓取 → 记录，循环往复。
                 </p>
                 <div className="flex items-center gap-4 text-xs font-mono opacity-50">
-                  <div className="flex items-center gap-1"><CheckCircle2 className="h-3 w-3" />自动点击刷新</div>
-                  <div className="flex items-center gap-1"><CheckCircle2 className="h-3 w-3" />抓取最新数据</div>
-                  <div className="flex items-center gap-1"><CheckCircle2 className="h-3 w-3" />记录变化历史</div>
+                  <div className="flex items-center gap-1"><CheckCircle2 className="h-3 w-3" />自动循环 N 次</div>
+                  <div className="flex items-center gap-1"><CheckCircle2 className="h-3 w-3" />可随时停止</div>
+                  <div className="flex items-center gap-1"><CheckCircle2 className="h-3 w-3" />数据变化对比</div>
                 </div>
               </div>
             )
           )}
 
-          {isPending && (
+          {isRunning && !loopProgress && (
             <Card className="flex flex-col items-center justify-center py-16 border-dashed border-2 bg-muted/10 animate-in fade-in">
               <Loader2 className="h-10 w-10 text-primary animate-spin mb-4" />
-              <h3 className="text-base font-medium mb-1">正在执行触发</h3>
-              <p className="text-sm text-muted-foreground">浏览器正在自动点击刷新并抓取最新数据...</p>
+              <h3 className="text-base font-medium mb-1">正在抓取</h3>
+              <p className="text-sm text-muted-foreground">浏览器正在工作，请稍候...</p>
             </Card>
           )}
         </div>
