@@ -103,34 +103,58 @@ router.get("/record/session/:id/stream", async (req, res) => {
   res.flushHeaders();
 
   let alive = true;
+  let lastHash = "";
+  let loopTimer: ReturnType<typeof setTimeout> | null = null;
+
   const send = (obj: object) => {
     if (!alive) return;
     try { res.write(`data: ${JSON.stringify(obj)}\n\n`); } catch { alive = false; }
   };
 
-  try {
-    const shot = await session.page.screenshot({ type: "jpeg", quality: 70 });
-    send({ type: "screenshot", data: shot.toString("base64"), url: session.page.url() });
-  } catch {}
+  // Recursive loop: wait for screenshot to finish, then schedule next frame.
+  // This avoids concurrent screenshots piling up when the page is slow.
+  const scheduleLoop = () => {
+    if (!alive) return;
+    loopTimer = setTimeout(loop, 80); // 80ms gap between frames
+  };
 
-  const loop = setInterval(async () => {
+  const loop = async () => {
     if (!alive) return;
     session.lastActivity = Date.now();
     try {
-      const shot = await session.page.screenshot({ type: "jpeg", quality: 70 });
+      const shot = await session.page.screenshot({ type: "jpeg", quality: 55, timeout: 4000 });
+
+      // Skip sending if the page is visually identical to the last frame
+      const hash = shot.length + "-" + shot[0] + shot[shot.length >> 1] + shot[shot.length - 1];
+      const changed = hash !== lastHash;
+      lastHash = hash;
+
       const url = session.page.url();
       if (url !== session.currentUrl) {
         session.currentUrl = url;
         send({ type: "navigated", url });
       }
-      send({ type: "screenshot", data: shot.toString("base64"), url });
+      if (changed) {
+        send({ type: "screenshot", data: shot.toString("base64"), url });
+      }
     } catch {
-      alive = false;
-      clearInterval(loop);
+      // Page may be navigating — skip this frame and try again
     }
-  }, 300);
+    scheduleLoop();
+  };
 
-  req.on("close", () => { alive = false; clearInterval(loop); });
+  // Send first frame immediately, then start loop
+  try {
+    const shot = await session.page.screenshot({ type: "jpeg", quality: 55, timeout: 4000 });
+    lastHash = shot.length + "-" + shot[0] + shot[shot.length >> 1] + shot[shot.length - 1];
+    send({ type: "screenshot", data: shot.toString("base64"), url: session.page.url() });
+  } catch {}
+  scheduleLoop();
+
+  req.on("close", () => {
+    alive = false;
+    if (loopTimer) clearTimeout(loopTimer);
+  });
 });
 
 // ─── CSS selector / label helpers (run inside page context) ──────────────────
