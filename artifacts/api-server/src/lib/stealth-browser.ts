@@ -15,7 +15,6 @@ const LAUNCH_ARGS = [
   "--disable-infobars",
   "--disable-notifications",
   "--disable-popup-blocking",
-  "--lang=zh-CN,zh",
   "--window-size=1280,800",
   "--start-maximized",
   "--disable-gpu",
@@ -118,8 +117,6 @@ export async function newStealthContext(
 ): Promise<BrowserContext> {
   const ctx = await browser.newContext({
     userAgent: STEALTH_UA,
-    locale: "zh-CN",
-    timezoneId: "Asia/Shanghai",
     viewport: { width: 1280, height: 800 },
     deviceScaleFactor: 1,
     hasTouch: false,
