@@ -201,8 +201,9 @@ export default function Parallel() {
   }, [executeOnce, tracks.length, toast]);
 
   // ── Loop run ─────────────────────────────────────────────────────────────────
-  // Fixed-interval mode: each cycle is exactly loopDelayMs from start to start.
-  // If execution takes longer than the interval, the next cycle begins immediately.
+  // Fixed-interval mode: each cycle starts exactly loopDelayMs after the previous
+  // cycle started. A hard timeout aborts the current execution if it exceeds the
+  // interval — the loop always moves on regardless of how long scraping takes.
   const runLoop = useCallback(async () => {
     stopLoopRef.current = false;
     setLoopRunning(true);
@@ -211,8 +212,21 @@ export default function Parallel() {
       if (stopLoopRef.current) break;
       setLoopProgress({ cur: i + 1, tot: loopCount, ok, fail });
       const cycleStart = Date.now();
+
+      // Hard deadline: forcibly abort the current execution when the interval expires.
+      // This guarantees the loop never gets stuck waiting for a slow/hung page.
+      let cycleTimer: ReturnType<typeof setTimeout> | null = null;
+      if (loopDelayMs > 0) {
+        cycleTimer = setTimeout(() => {
+          abortRef.current?.abort();
+        }, loopDelayMs);
+      }
+
       const succeeded = await executeOnce();
+      if (cycleTimer) { clearTimeout(cycleTimer); cycleTimer = null; }
+
       if (succeeded) ok++; else fail++;
+
       if (i < loopCount - 1 && !stopLoopRef.current) {
         const remaining = loopDelayMs - (Date.now() - cycleStart);
         // Always wait at least 300ms so React state from the previous run
