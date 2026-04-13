@@ -1,6 +1,7 @@
 import { Router } from "express";
 import { randomUUID } from "crypto";
 import { launchStealthBrowser, newStealthContext } from "../lib/stealth-browser";
+import { humanClick, humanRightClick, humanDoubleClick, humanType } from "../lib/human-actions";
 
 const router = Router();
 
@@ -360,25 +361,25 @@ router.post("/record/session/:id/step", async (req, res) => {
     switch (step.type) {
       case "click":
         await page.waitForSelector(step.selector!, { timeout: 8000 });
-        await page.click(step.selector!);
+        await humanClick(page, step.selector!);
         await page.waitForTimeout(step.waitMs ?? 1000);
         break;
 
       case "doubleclick":
         await page.waitForSelector(step.selector!, { timeout: 8000 });
-        await page.dblclick(step.selector!);
+        await humanDoubleClick(page, step.selector!);
         await page.waitForTimeout(step.waitMs ?? 500);
         break;
 
       case "rightclick":
         await page.waitForSelector(step.selector!, { timeout: 8000 });
-        await page.click(step.selector!, { button: "right" });
+        await humanRightClick(page, step.selector!);
         await page.waitForTimeout(step.waitMs ?? 500);
         break;
 
       case "type":
         await page.waitForSelector(step.selector!, { timeout: 8000 });
-        await page.fill(step.selector!, rv(step.text ?? ""));
+        await humanType(page, step.selector!, rv(step.text ?? ""));
         await page.waitForTimeout(step.waitMs ?? 300);
         break;
 
