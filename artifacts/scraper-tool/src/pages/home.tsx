@@ -349,8 +349,8 @@ export default function Home() {
 
   return (
     <>
-    <div className="container mx-auto px-4 py-8 max-w-7xl">
-      <div className="grid grid-cols-1 lg:grid-cols-12 gap-6">
+    <div className="container mx-auto px-3 sm:px-4 py-4 sm:py-8 max-w-7xl">
+      <div className="grid grid-cols-1 lg:grid-cols-12 gap-4 sm:gap-6">
 
         {/* ── LEFT ─────────────────────────────────────────────────────── */}
         <div className="lg:col-span-4 space-y-4">
@@ -764,7 +764,7 @@ export default function Home() {
                   <span className="text-muted-foreground text-xs">{Math.round((loopProgress.current / loopProgress.total) * 100)}%</span>
                 </div>
                 <Progress value={(loopProgress.current / loopProgress.total) * 100} className="h-2" />
-                <p className="text-xs text-muted-foreground">点左侧"停止循环"随时中断，已收集数据不会丢失</p>
+                <p className="text-xs text-muted-foreground">随时点"停止循环"中断，已收集数据不会丢失</p>
               </CardContent>
             </Card>
           )}
@@ -993,46 +993,50 @@ export default function Home() {
     {isRecording && (
       <div className="fixed inset-0 z-50 flex flex-col bg-background/95 backdrop-blur-sm animate-in fade-in">
         {/* Top bar */}
-        <div className="flex items-center gap-3 px-4 py-3 border-b bg-background shadow-sm shrink-0">
-          <div className="flex items-center gap-2">
-            <span className="relative flex h-3 w-3">
+        <div className="flex items-center gap-2 px-3 sm:px-4 py-2.5 sm:py-3 border-b bg-background shadow-sm shrink-0">
+          <div className="flex items-center gap-1.5 shrink-0">
+            <span className="relative flex h-2.5 w-2.5">
               <span className="animate-ping absolute inline-flex h-full w-full rounded-full bg-red-400 opacity-75" />
-              <span className="relative inline-flex rounded-full h-3 w-3 bg-red-500" />
+              <span className="relative inline-flex rounded-full h-2.5 w-2.5 bg-red-500" />
             </span>
-            <span className="text-sm font-semibold text-red-600">录制中</span>
+            <span className="text-xs sm:text-sm font-semibold text-red-600">录制中</span>
           </div>
-          <div className="flex-1 flex items-center gap-2 min-w-0">
-            <Link2 className="h-3.5 w-3.5 text-muted-foreground shrink-0" />
-            <span className="text-xs text-muted-foreground font-mono truncate">{iframeSrc.replace("/api/record/proxy?url=", "").split("?")[0]}</span>
+          <div className="flex-1 flex items-center gap-1.5 min-w-0">
+            <Link2 className="h-3 w-3 text-muted-foreground shrink-0 hidden sm:block" />
+            <span className="text-[10px] sm:text-xs text-muted-foreground font-mono truncate">
+              {decodeURIComponent(iframeSrc.replace("/api/record/proxy?url=", "")).split("?")[0]}
+            </span>
           </div>
           {!iframeReady && (
-            <div className="flex items-center gap-1.5 text-xs text-muted-foreground">
-              <Loader2 className="h-3 w-3 animate-spin" />加载中…
+            <div className="flex items-center gap-1 text-xs text-muted-foreground shrink-0">
+              <Loader2 className="h-3 w-3 animate-spin" />
+              <span className="hidden sm:inline">加载中…</span>
             </div>
           )}
-          <Button type="button" variant="ghost" size="sm" className="gap-1.5 text-muted-foreground" onClick={stopRecording}>
-            <X className="h-4 w-4" />关闭
+          <Button type="button" variant="ghost" size="sm" className="h-7 w-7 p-0 sm:w-auto sm:px-3 sm:gap-1.5 text-muted-foreground shrink-0" onClick={stopRecording}>
+            <X className="h-4 w-4" /><span className="hidden sm:inline">关闭</span>
           </Button>
-          <Button type="button" variant="destructive" size="sm" className="gap-1.5" onClick={stopRecording}>
-            <StopCircle className="h-4 w-4" />停止录制
+          <Button type="button" variant="destructive" size="sm" className="h-7 px-2 sm:px-3 gap-1.5 shrink-0 text-xs" onClick={stopRecording}>
+            <StopCircle className="h-3.5 w-3.5" /><span className="hidden xs:inline">停止</span>
           </Button>
         </div>
 
         {/* Main content: browser iframe + step log */}
-        <div className="flex flex-1 overflow-hidden">
+        <div className="flex flex-col md:flex-row flex-1 overflow-hidden">
           {/* iframe */}
-          <div className="flex-1 relative bg-white">
+          <div className="flex-1 relative bg-white min-h-0" style={{ minHeight: 0 }}>
             <iframe
               ref={iframeRef}
               src={iframeSrc}
               className="w-full h-full border-0"
+              style={{ minHeight: "40vh" }}
               sandbox="allow-scripts allow-same-origin allow-forms allow-popups allow-popups-to-escape-sandbox"
               title="录制浏览器"
             />
           </div>
 
           {/* Step log panel */}
-          <div className="w-80 border-l flex flex-col bg-muted/20 shrink-0">
+          <div className="w-full md:w-72 lg:w-80 border-t md:border-t-0 md:border-l flex flex-col bg-muted/20 shrink-0 max-h-[45vh] md:max-h-none">
             <div className="flex items-center justify-between px-3 py-2.5 border-b bg-background">
               <div className="flex items-center gap-2 text-sm font-medium">
                 <Activity className="h-4 w-4 text-primary" />

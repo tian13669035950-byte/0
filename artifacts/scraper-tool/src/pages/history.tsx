@@ -25,10 +25,10 @@ export default function History() {
   });
 
   return (
-    <div className="container mx-auto px-4 py-8 max-w-4xl">
-      <div className="mb-6 space-y-1">
-        <h1 className="text-2xl font-bold tracking-tight">历史记录</h1>
-        <p className="text-sm text-muted-foreground">所有执行过的抓取任务，点击展开查看读取到的数据。</p>
+    <div className="container mx-auto px-3 sm:px-4 py-4 sm:py-8 max-w-4xl">
+      <div className="mb-4 sm:mb-6 space-y-1">
+        <h1 className="text-xl sm:text-2xl font-bold tracking-tight">历史记录</h1>
+        <p className="text-xs sm:text-sm text-muted-foreground">所有执行过的抓取任务，点击展开查看读取到的数据。</p>
       </div>
 
       <div className="flex items-center justify-between mb-4">
@@ -151,9 +151,9 @@ export default function History() {
                           <div className="space-y-2">
                             {item.customResults!.filter(r => r.values.length > 0).map((cr, ci) => (
                               <div key={ci} className="border rounded-lg overflow-hidden">
-                                <div className="flex items-center gap-2 px-3 py-2 bg-muted/40 border-b">
-                                  <span className="font-medium text-xs">{cr.name}</span>
-                                  <code className="text-xs font-mono text-muted-foreground">{cr.selector}</code>
+                                <div className="flex items-center gap-2 px-3 py-2 bg-muted/40 border-b flex-wrap">
+                                  <span className="font-medium text-xs shrink-0">{cr.name}</span>
+                                  <code className="text-xs font-mono text-muted-foreground truncate max-w-full">{cr.selector}</code>
                                 </div>
                                 {cr.values.map((v, vi) => (
                                   <div key={vi} className="px-3 py-2 font-mono text-sm border-b last:border-b-0 break-all">{v}</div>
