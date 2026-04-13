@@ -110,17 +110,31 @@ function fetchShim(targetOrigin: string): string {
 </script>`;
 }
 
-const FETCH_OPTS = {
-  headers: {
-    "User-Agent":
-      "Mozilla/5.0 (X11; Linux x86_64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/120.0.0.0 Safari/537.36",
-    Accept:
-      "text/html,application/xhtml+xml,application/xml;q=0.9,image/webp,*/*;q=0.8",
-    "Accept-Language": "zh-CN,zh;q=0.9,en;q=0.8",
-  },
-  redirect: "follow" as const,
-  signal: AbortSignal.timeout(15000),
+// NOTE: do NOT put AbortSignal here — it would be shared across all requests
+// and fire once, permanently aborting every subsequent fetch call.
+const BASE_HEADERS = {
+  "User-Agent":
+    "Mozilla/5.0 (X11; Linux x86_64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/120.0.0.0 Safari/537.36",
+  Accept:
+    "text/html,application/xhtml+xml,application/xml;q=0.9,image/webp,*/*;q=0.8",
+  "Accept-Language": "zh-CN,zh;q=0.9,en;q=0.8",
 };
+
+function htmlFetchOpts() {
+  return {
+    headers: { ...BASE_HEADERS },
+    redirect: "follow" as const,
+    signal: AbortSignal.timeout(20000),
+  };
+}
+
+function resFetchOpts() {
+  return {
+    headers: { ...BASE_HEADERS, Accept: "*/*" },
+    redirect: "follow" as const,
+    signal: AbortSignal.timeout(12000),
+  };
+}
 
 // ─── HTML Proxy ───────────────────────────────────────────────────────────────
 // GET /api/record/proxy?url=https://example.com
@@ -138,7 +152,7 @@ router.get("/record/proxy", async (req, res) => {
   }
 
   try {
-    const upstream = await fetch(targetUrl, FETCH_OPTS);
+    const upstream = await fetch(targetUrl, htmlFetchOpts());
     const ct = upstream.headers.get("content-type") ?? "";
 
     if (!ct.includes("text/html")) {
@@ -190,14 +204,7 @@ router.get("/record/res", async (req, res) => {
   }
 
   try {
-    const upstream = await fetch(targetUrl, {
-      ...FETCH_OPTS,
-      headers: {
-        ...FETCH_OPTS.headers,
-        Accept: "*/*",
-      },
-      signal: AbortSignal.timeout(10000),
-    });
+    const upstream = await fetch(targetUrl, resFetchOpts());
 
     const ct = upstream.headers.get("content-type") ?? "application/octet-stream";
 
