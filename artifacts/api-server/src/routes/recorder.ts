@@ -96,11 +96,20 @@ router.get("/record/session/:id/stream", async (req, res) => {
   let alive = true;
   let lastHash = "";
   let loopTimer: ReturnType<typeof setTimeout> | null = null;
+  let lastSentAt = Date.now();
 
   const send = (obj: object) => {
     if (!alive) return;
-    try { res.write(`data: ${JSON.stringify(obj)}\n\n`); } catch { alive = false; }
+    try { res.write(`data: ${JSON.stringify(obj)}\n\n`); lastSentAt = Date.now(); } catch { alive = false; }
   };
+
+  // Send an SSE comment every 8 s when page is unchanged — keeps Replit proxy from closing idle connections
+  const keepaliveTimer = setInterval(() => {
+    if (!alive) { clearInterval(keepaliveTimer); return; }
+    if (Date.now() - lastSentAt > 8000) {
+      try { res.write(": ping\n\n"); lastSentAt = Date.now(); } catch { alive = false; }
+    }
+  }, 8000);
 
   // Recursive loop: wait for screenshot to finish, then schedule next frame.
   // This avoids concurrent screenshots piling up when the page is slow.
@@ -144,6 +153,7 @@ router.get("/record/session/:id/stream", async (req, res) => {
 
   req.on("close", () => {
     alive = false;
+    clearInterval(keepaliveTimer);
     if (loopTimer) clearTimeout(loopTimer);
   });
 });

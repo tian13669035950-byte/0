@@ -522,9 +522,17 @@ router.post("/scrape/stream", async (req, res) => {
   res.setHeader("Cache-Control", "no-cache");
   res.setHeader("X-Accel-Buffering", "no");
 
+  let lastWriteAt = Date.now();
   const write = (event: StreamEvent) => {
-    try { res.write(JSON.stringify(event) + "\n"); } catch { /* client disconnected */ }
+    try { res.write(JSON.stringify(event) + "\n"); lastWriteAt = Date.now(); } catch { /* client disconnected */ }
   };
+
+  // Keepalive: send a comment line every 8 s during long steps to prevent proxy idle-timeout
+  const keepalive = setInterval(() => {
+    if (Date.now() - lastWriteAt > 8000) {
+      try { res.write(": ping\n"); lastWriteAt = Date.now(); } catch { /* closed */ }
+    }
+  }, 8000);
 
   // Register watch session slot so the SSE stream can start connecting immediately
   const watchId = randomUUID();
@@ -537,6 +545,7 @@ router.post("/scrape/stream", async (req, res) => {
   } catch (err) {
     write({ t: "error", message: err instanceof Error ? err.message : "Unknown error" });
   } finally {
+    clearInterval(keepalive);
     watchSessions.delete(watchId);
   }
   res.end();
