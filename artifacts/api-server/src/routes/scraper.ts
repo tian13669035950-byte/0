@@ -510,7 +510,8 @@ async function runScrapeSession(
 
     return { id, url, title, scrapedAt, duration, headings, links, paragraphs, images, metaTags, customResults, clickedElement, capturedVars: vars };
   } catch (err) {
-    await browser.close().catch(() => {});
+    // Try graceful close first; fall back to SIGKILL so the window always disappears
+    try { await browser.close(); } catch { browser.process()?.kill("SIGKILL"); }
     throw err;
   }
 }

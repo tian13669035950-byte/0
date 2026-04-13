@@ -29,6 +29,7 @@ interface ParallelPreset {
   name: string; savedAt: string;
   tracks: Array<{ seqName: string; urlOverride: string }>;
   loopEnabled: boolean; loopCount: number; loopDelayMs: number;
+  raceMode?: boolean;
 }
 
 // ─── Storage ──────────────────────────────────────────────────────────────────
@@ -66,6 +67,9 @@ export default function Parallel() {
   const abortRef = useRef<AbortController | null>(null);
   const watchEsRefs = useRef<Map<number, EventSource>>(new Map());
   const closeWatchTimerRef = useRef<ReturnType<typeof setTimeout> | null>(null);
+
+  // ── Race mode ────────────────────────────────────────────────────────────────
+  const [raceMode, setRaceMode] = useState(false);
 
   // ── Loop state ──────────────────────────────────────────────────────────────
   const [loopEnabled, setLoopEnabled] = useState(false);
@@ -139,6 +143,8 @@ export default function Parallel() {
     };
 
     let succeeded = false;
+    // raceWon: set when race mode triggers so we don't show an error toast for the abort
+    let raceWon = false;
     try {
       const resp = await fetch("/api/parallel/stream", { method: "POST", headers: { "Content-Type": "application/json" }, body: JSON.stringify(payload), signal: ac.signal });
       if (!resp.ok) throw new Error(await resp.text());
@@ -170,6 +176,11 @@ export default function Parallel() {
                 ts.done = true; ts.duration = (ev as { duration?: number }).duration;
                 addItemToStore(fromScrapeResult(ev as unknown as ScrapeResult, "parallel", `轨道 ${TRACK_LABELS[idx]}`));
                 window.dispatchEvent(new StorageEvent("storage", { key: "scraper-collected-v1" }));
+                // Race mode: first track to finish wins — abort all others immediately
+                if (raceMode && !raceWon) {
+                  raceWon = true;
+                  abortRef.current?.abort();
+                }
               }
               if (ev.t === "error") { ts.done = true; ts.error = ev.message as string; }
               next[idx] = ts;
@@ -180,7 +191,10 @@ export default function Parallel() {
       }
       succeeded = true;
     } catch (e) {
-      if (!(e instanceof DOMException && e.name === "AbortError")) {
+      // Race mode abort is intentional — don't show an error toast, count as success
+      if (raceWon) {
+        succeeded = true;
+      } else if (!(e instanceof DOMException && e.name === "AbortError")) {
         toast({ title: "执行失败", description: e instanceof Error ? e.message : "未知错误", variant: "destructive" });
       }
     } finally {
@@ -192,7 +206,7 @@ export default function Parallel() {
       closeWatchTimerRef.current = setTimeout(() => closeAllWatch(), 3000);
     }
     return succeeded;
-  }, [tracks, sequences, proxyUrl, headedMode, toast, openWatch, closeAllWatch]);
+  }, [tracks, sequences, proxyUrl, headedMode, raceMode, toast, openWatch, closeAllWatch]);
 
   // ── Single run ───────────────────────────────────────────────────────────────
   const runParallel = useCallback(async () => {
@@ -258,7 +272,7 @@ export default function Parallel() {
     const preset: ParallelPreset = {
       name: n, savedAt: new Date().toISOString(),
       tracks: tracks.map(t => ({ seqName: t.seqName, urlOverride: t.urlOverride })),
-      loopEnabled, loopCount, loopDelayMs,
+      loopEnabled, loopCount, loopDelayMs, raceMode,
     };
     const updated = [preset, ...presets.filter(p => p.name !== n)];
     savePresets(updated); setPresets(updated); setPresetName("");
@@ -270,6 +284,7 @@ export default function Parallel() {
     setLoopEnabled(preset.loopEnabled ?? false);
     setLoopCount(preset.loopCount ?? 3);
     setLoopDelayMs(preset.loopDelayMs ?? 3000);
+    setRaceMode(preset.raceMode ?? false);
     toast({ title: `已加载配置「${preset.name}」` });
   };
 
@@ -509,9 +524,31 @@ export default function Parallel() {
             )}
           </div>
 
-          {/* Loop settings */}
-          <Card className={`mb-4 border-border/50 transition-all ${loopEnabled ? "border-violet-300 bg-violet-50/30" : ""}`}>
-            <CardContent className="py-3 px-4">
+          {/* Loop + Race settings */}
+          <Card className={`mb-4 border-border/50 transition-all ${loopEnabled ? "border-violet-300 bg-violet-50/30" : raceMode ? "border-amber-300 bg-amber-50/30" : ""}`}>
+            <CardContent className="py-3 px-4 space-y-3">
+              {/* Race mode toggle */}
+              <div className="flex items-center gap-5 flex-wrap">
+                <label className="flex items-center gap-2 cursor-pointer select-none">
+                  <div
+                    className={`relative w-9 h-5 rounded-full transition-colors ${raceMode ? "bg-amber-500" : "bg-muted"}`}
+                    onClick={() => !isRunning && setRaceMode(v => !v)}
+                  >
+                    <span className={`absolute top-0.5 left-0.5 w-4 h-4 rounded-full bg-white shadow transition-transform ${raceMode ? "translate-x-4" : ""}`} />
+                  </div>
+                  <span className="text-sm font-medium flex items-center gap-1.5">
+                    <span className="text-amber-500">⚡</span>竞速模式
+                  </span>
+                </label>
+                {raceMode && (
+                  <span className="text-xs text-muted-foreground">任意一条轨道完成即立即停止其余轨道</span>
+                )}
+              </div>
+
+              {/* Divider */}
+              <div className="border-t border-border/40" />
+
+              {/* Loop toggle */}
               <div className="flex items-center gap-5 flex-wrap">
                 <label className="flex items-center gap-2 cursor-pointer select-none">
                   <div
