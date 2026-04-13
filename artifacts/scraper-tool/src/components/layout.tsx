@@ -1,6 +1,6 @@
 import { Link, useLocation } from "wouter";
 import { cn } from "@/lib/utils";
-import { Terminal, Clock, Code2 } from "lucide-react";
+import { Terminal, Clock, Code2, Download } from "lucide-react";
 import { ReactNode } from "react";
 
 export function Layout({ children }: { children: ReactNode }) {
@@ -16,7 +16,7 @@ export function Layout({ children }: { children: ReactNode }) {
               Scraper<span className="text-primary">Tool</span>
             </span>
           </Link>
-          <nav className="flex items-center gap-1 text-sm font-medium">
+          <nav className="flex items-center gap-1 text-sm font-medium flex-1">
             <Link
               href="/"
               className={cn(
@@ -42,6 +42,15 @@ export function Layout({ children }: { children: ReactNode }) {
               <span className="text-xs sm:text-sm">历史记录</span>
             </Link>
           </nav>
+          <a
+            href="/api/download-source"
+            download="scraper-tool.tar.gz"
+            title="下载源码（含安装说明书）"
+            className="flex items-center gap-1.5 px-2.5 py-1.5 rounded-md text-xs text-foreground/60 hover:text-foreground hover:bg-muted transition-colors shrink-0"
+          >
+            <Download className="h-3.5 w-3.5 shrink-0" />
+            <span className="hidden sm:inline">下载源码</span>
+          </a>
         </div>
       </header>
       <main className="flex-1 flex flex-col">
