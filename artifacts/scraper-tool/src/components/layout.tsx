@@ -1,13 +1,16 @@
 import { Link, useLocation } from "wouter";
 import { cn } from "@/lib/utils";
 import { Terminal, Clock, Code2, Download, GitFork, LayoutList } from "lucide-react";
-import { ReactNode } from "react";
+import { type ReactNode } from "react";
 import { loadItems } from "@/lib/result-store";
 import { useState, useEffect } from "react";
+import { useParallel } from "@/lib/parallel-context";
 
 export function Layout({ children }: { children: ReactNode }) {
   const [location] = useLocation();
   const [resultCount, setResultCount] = useState(() => loadItems().length);
+  const { running, loopRunning } = useParallel();
+  const isParallelRunning = running || loopRunning;
 
   useEffect(() => {
     const onStorage = (e: StorageEvent) => {
@@ -64,6 +67,13 @@ export function Layout({ children }: { children: ReactNode }) {
             >
               <GitFork className="h-3.5 w-3.5 shrink-0" />
               <span className="text-xs sm:text-sm">并行执行</span>
+              {/* Background running indicator — visible when not on the parallel page */}
+              {isParallelRunning && location !== "/parallel" && (
+                <span className="inline-flex items-center gap-0.5 ml-0.5 px-1.5 py-0 h-4 rounded-full bg-primary text-primary-foreground text-[9px] font-bold leading-none">
+                  <span className="w-1 h-1 rounded-full bg-primary-foreground animate-ping opacity-75" />
+                  进行中
+                </span>
+              )}
             </Link>
             <Link
               href="/results"

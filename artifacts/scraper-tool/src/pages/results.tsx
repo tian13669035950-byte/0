@@ -9,11 +9,13 @@ import {
   Trash2, Globe, Clock, ExternalLink, ChevronDown, ChevronUp,
   Search, Download, RotateCcw, Pencil, Check, X, Database,
   Crosshair, Link2, AlignLeft, Heading1, Upload, GitFork, Terminal,
+  Tag, FolderPlus, MoveRight, CheckSquare, Square as SquareIcon,
 } from "lucide-react";
 import { format } from "date-fns";
 import {
   loadItems, deleteItemFromStore, updateItemInStore, clearStore,
-  addRawItemToStore, type CollectedItem,
+  addRawItemToStore, moveItemsToCategory, type CollectedItem,
+  loadCategories, addCategory, deleteCategory,
 } from "@/lib/result-store";
 
 // ─── Editable text cell ───────────────────────────────────────────────────────
@@ -42,7 +44,16 @@ function EditableText({ value, onSave, multiline }: { value: string; onSave: (v:
 }
 
 // ─── Item card ────────────────────────────────────────────────────────────────
-function ItemCard({ item, onDelete, onUpdate }: { item: CollectedItem; onDelete: () => void; onUpdate: (p: Partial<Pick<CollectedItem, "note" | "capturedVars">>) => void }) {
+function ItemCard({
+  item, onDelete, onUpdate, selected, onSelect, selectMode,
+}: {
+  item: CollectedItem;
+  onDelete: () => void;
+  onUpdate: (p: Partial<Pick<CollectedItem, "note" | "capturedVars" | "category">>) => void;
+  selected: boolean;
+  onSelect: () => void;
+  selectMode: boolean;
+}) {
   const [open, setOpen] = useState(false);
   const hasVars = Object.keys(item.capturedVars).length > 0;
   const hasCustom = item.customResults.some(r => r.values.length > 0);
@@ -54,16 +65,32 @@ function ItemCard({ item, onDelete, onUpdate }: { item: CollectedItem; onDelete:
   const customCount = item.customResults.reduce((s, r) => s + r.values.length, 0);
 
   return (
-    <Card className="border-border/60 shadow-sm overflow-hidden">
-      <div className="flex items-start justify-between gap-3 px-4 py-3 cursor-pointer hover:bg-muted/30 transition-colors" onClick={() => hasContent && setOpen(o => !o)}>
+    <Card className={`border-border/60 shadow-sm overflow-hidden transition-all ${selected ? "ring-2 ring-primary/50 bg-primary/5" : ""}`}>
+      <div
+        className="flex items-start justify-between gap-3 px-4 py-3 cursor-pointer hover:bg-muted/30 transition-colors"
+        onClick={() => selectMode ? onSelect() : (hasContent && setOpen(o => !o))}
+      >
         <div className="flex items-start gap-3 min-w-0 flex-1">
-          <div className="mt-1.5 h-2 w-2 rounded-full shrink-0 bg-primary/60" />
+          {/* Checkbox (select mode) */}
+          {selectMode && (
+            <div className="mt-1 shrink-0">
+              {selected
+                ? <CheckSquare className="h-4 w-4 text-primary" />
+                : <SquareIcon className="h-4 w-4 text-muted-foreground" />}
+            </div>
+          )}
+          {!selectMode && <div className="mt-1.5 h-2 w-2 rounded-full shrink-0 bg-primary/60" />}
           <div className="min-w-0 flex-1">
             <div className="flex items-center gap-2 flex-wrap mb-1">
               <span className="font-medium text-sm truncate max-w-[240px]">{item.title || "无标题"}</span>
               <Badge variant="outline" className={`text-[10px] px-1.5 py-0 h-4 ${item.source === "parallel" ? "border-violet-300 text-violet-600" : "border-sky-300 text-sky-600"}`}>
                 {item.source === "parallel" ? `并行${item.trackLabel ? ` · ${item.trackLabel}` : ""}` : "单独"}
               </Badge>
+              {item.category && (
+                <Badge variant="outline" className="text-[10px] px-1.5 py-0 h-4 border-indigo-300 text-indigo-600 gap-0.5">
+                  <Tag className="h-2.5 w-2.5" />{item.category}
+                </Badge>
+              )}
               {varCount > 0 && <Badge className="text-[10px] px-1.5 py-0 h-4 bg-teal-100 text-teal-700 border-teal-200">{varCount} 个变量</Badge>}
               {customCount > 0 && <Badge variant="secondary" className="text-[10px] px-1.5 py-0 h-4">{customCount} 条数据</Badge>}
               {item.note && <Badge variant="outline" className="text-[10px] px-1.5 py-0 h-4 border-amber-300 text-amber-600">有备注</Badge>}
@@ -80,12 +107,14 @@ function ItemCard({ item, onDelete, onUpdate }: { item: CollectedItem; onDelete:
           </div>
         </div>
         <div className="flex items-center gap-1 shrink-0 mt-0.5">
-          {hasContent && (open ? <ChevronUp className="h-4 w-4 text-muted-foreground" /> : <ChevronDown className="h-4 w-4 text-muted-foreground" />)}
-          <button type="button" onClick={e => { e.stopPropagation(); onDelete(); }} className="p-1 rounded hover:bg-destructive/10 hover:text-destructive transition-colors ml-1" title="删除"><Trash2 className="h-3.5 w-3.5" /></button>
+          {!selectMode && hasContent && (open ? <ChevronUp className="h-4 w-4 text-muted-foreground" /> : <ChevronDown className="h-4 w-4 text-muted-foreground" />)}
+          {!selectMode && (
+            <button type="button" onClick={e => { e.stopPropagation(); onDelete(); }} className="p-1 rounded hover:bg-destructive/10 hover:text-destructive transition-colors ml-1" title="删除"><Trash2 className="h-3.5 w-3.5" /></button>
+          )}
         </div>
       </div>
 
-      {open && hasContent && (
+      {!selectMode && open && hasContent && (
         <CardContent className="px-4 pb-4 pt-0 animate-in fade-in slide-in-from-top-1 duration-150">
           <div className="space-y-3 ml-5">
             {/* Note */}
@@ -176,7 +205,14 @@ function ItemCard({ item, onDelete, onUpdate }: { item: CollectedItem; onDelete:
 }
 
 // ─── Track group (for parallel view) ─────────────────────────────────────────
-function TrackGroup({ label, items, onDelete, onUpdate }: { label: string; items: CollectedItem[]; onDelete: (id: string) => void; onUpdate: (id: string, p: Partial<Pick<CollectedItem, "note" | "capturedVars">>) => void }) {
+function TrackGroup({
+  label, items, onDelete, onUpdate, selectedIds, onSelect, selectMode,
+}: {
+  label: string; items: CollectedItem[];
+  onDelete: (id: string) => void;
+  onUpdate: (id: string, p: Partial<Pick<CollectedItem, "note" | "capturedVars" | "category">>) => void;
+  selectedIds: Set<string>; onSelect: (id: string) => void; selectMode: boolean;
+}) {
   const [open, setOpen] = useState(true);
   return (
     <div>
@@ -189,7 +225,13 @@ function TrackGroup({ label, items, onDelete, onUpdate }: { label: string; items
       {open && (
         <div className="space-y-2 pl-8 mb-4">
           {items.map(item => (
-            <ItemCard key={item.id} item={item} onDelete={() => onDelete(item.id)} onUpdate={p => onUpdate(item.id, p)} />
+            <ItemCard key={item.id} item={item}
+              onDelete={() => onDelete(item.id)}
+              onUpdate={p => onUpdate(item.id, p)}
+              selected={selectedIds.has(item.id)}
+              onSelect={() => onSelect(item.id)}
+              selectMode={selectMode}
+            />
           ))}
         </div>
       )}
@@ -199,14 +241,29 @@ function TrackGroup({ label, items, onDelete, onUpdate }: { label: string; items
 
 // ─── Main page ────────────────────────────────────────────────────────────────
 type SourceTab = "all" | "single" | "parallel";
+const UNCATEGORIZED = "__uncategorized__";
 
 export default function Results() {
   const [items, setItems] = useState<CollectedItem[]>(() => loadItems());
+  const [categories, setCategories] = useState<string[]>(() => loadCategories());
   const [query, setQuery] = useState("");
   const [sourceTab, setSourceTab] = useState<SourceTab>("all");
+  const [activeCategory, setActiveCategory] = useState<string>("all");
   const importRef = useRef<HTMLInputElement>(null);
 
-  const refresh = useCallback(() => setItems(loadItems()), []);
+  // ── Category management UI state ─────────────────────────────────────────────
+  const [newCatName, setNewCatName] = useState("");
+  const [showCatInput, setShowCatInput] = useState(false);
+
+  // ── Select mode ──────────────────────────────────────────────────────────────
+  const [selectMode, setSelectMode] = useState(false);
+  const [selectedIds, setSelectedIds] = useState<Set<string>>(new Set());
+  const [moveTarget, setMoveTarget] = useState("");
+
+  const refresh = useCallback(() => {
+    setItems(loadItems());
+    setCategories(loadCategories());
+  }, []);
 
   useEffect(() => {
     const onStorage = (e: StorageEvent) => { if (e.key === "scraper-collected-v1") refresh(); };
@@ -216,7 +273,7 @@ export default function Results() {
   }, [refresh]);
 
   const handleDelete = (id: string) => { deleteItemFromStore(id); refresh(); };
-  const handleUpdate = (id: string, patch: Partial<Pick<CollectedItem, "note" | "capturedVars">>) => { updateItemInStore(id, patch); refresh(); };
+  const handleUpdate = (id: string, patch: Partial<Pick<CollectedItem, "note" | "capturedVars" | "category">>) => { updateItemInStore(id, patch); refresh(); };
   const handleClear = () => {
     if (!window.confirm(`确定要清空全部 ${items.length} 条数据吗？此操作不可撤销。`)) return;
     clearStore(); refresh();
@@ -230,9 +287,9 @@ export default function Results() {
   };
 
   const handleExportCsv = () => {
-    const rows: string[][] = [["时间", "来源", "轨道", "URL", "标题", "耗时(ms)", "变量", "备注"]];
+    const rows: string[][] = [["时间", "来源", "轨道", "URL", "标题", "耗时(ms)", "分类", "变量", "备注"]];
     for (const item of items) {
-      rows.push([item.scrapedAt, item.source === "parallel" ? "并行" : "单独", item.trackLabel ?? "", item.url, item.title, String(item.duration), JSON.stringify(item.capturedVars), item.note]);
+      rows.push([item.scrapedAt, item.source === "parallel" ? "并行" : "单独", item.trackLabel ?? "", item.url, item.title, String(item.duration), item.category ?? "", JSON.stringify(item.capturedVars), item.note]);
     }
     const csv = rows.map(r => r.map(c => `"${c.replace(/"/g, '""')}"`).join(",")).join("\n");
     const blob = new Blob(["\uFEFF" + csv], { type: "text/csv;charset=utf-8" });
@@ -263,19 +320,65 @@ export default function Results() {
     e.target.value = "";
   };
 
+  // ── Category actions ─────────────────────────────────────────────────────────
+  const handleAddCategory = () => {
+    const n = newCatName.trim();
+    if (!n) return;
+    addCategory(n);
+    setCategories(loadCategories());
+    setNewCatName("");
+    setShowCatInput(false);
+    setActiveCategory(n);
+  };
+
+  const handleDeleteCategory = (name: string) => {
+    if (!window.confirm(`删除分类「${name}」？该分类下的条目将变为未分类。`)) return;
+    deleteCategory(name);
+    setCategories(loadCategories());
+    if (activeCategory === name) setActiveCategory("all");
+    setItems(loadItems());
+  };
+
+  // ── Select mode actions ──────────────────────────────────────────────────────
+  const toggleSelect = (id: string) => {
+    setSelectedIds(prev => {
+      const next = new Set(prev);
+      if (next.has(id)) next.delete(id); else next.add(id);
+      return next;
+    });
+  };
+
+  const handleMoveSelected = () => {
+    if (selectedIds.size === 0 || !moveTarget) return;
+    moveItemsToCategory(selectedIds, moveTarget === UNCATEGORIZED ? "" : moveTarget);
+    setSelectedIds(new Set());
+    setMoveTarget("");
+    refresh();
+  };
+
+  const exitSelectMode = () => { setSelectMode(false); setSelectedIds(new Set()); setMoveTarget(""); };
+
   // ── Filter & group ──────────────────────────────────────────────────────────
   const bySource = sourceTab === "all" ? items : items.filter(i => i.source === (sourceTab === "single" ? "single" : "parallel"));
+
+  const byCategory = activeCategory === "all"
+    ? bySource
+    : activeCategory === UNCATEGORIZED
+      ? bySource.filter(i => !i.category)
+      : bySource.filter(i => i.category === activeCategory);
+
   const filtered = query.trim()
-    ? bySource.filter(i =>
+    ? byCategory.filter(i =>
         i.url.toLowerCase().includes(query.toLowerCase()) ||
         i.title.toLowerCase().includes(query.toLowerCase()) ||
         i.note.toLowerCase().includes(query.toLowerCase()) ||
         Object.values(i.capturedVars).some(v => v.toLowerCase().includes(query.toLowerCase()))
       )
-    : bySource;
+    : byCategory;
 
   const singleCount = items.filter(i => i.source === "single").length;
   const parallelCount = items.filter(i => i.source === "parallel").length;
+  const uncategorizedCount = items.filter(i => !i.category).length;
 
   // Group parallel items by track label
   const parallelGroups: Record<string, CollectedItem[]> = {};
@@ -296,7 +399,7 @@ export default function Results() {
       </div>
 
       {/* Source tabs */}
-      <Tabs value={sourceTab} onValueChange={v => setSourceTab(v as SourceTab)} className="mb-4">
+      <Tabs value={sourceTab} onValueChange={v => setSourceTab(v as SourceTab)} className="mb-3">
         <TabsList className="h-8">
           <TabsTrigger value="all" className="text-xs h-7 gap-1.5">
             <Database className="h-3.5 w-3.5" />全部
@@ -313,6 +416,72 @@ export default function Results() {
         </TabsList>
       </Tabs>
 
+      {/* ── Category bar ─────────────────────────────────────────────────────── */}
+      <div className="mb-3">
+        <div className="flex items-center gap-1.5 flex-wrap">
+          <Tag className="h-3.5 w-3.5 text-muted-foreground shrink-0" />
+
+          {/* All */}
+          <button
+            onClick={() => setActiveCategory("all")}
+            className={`text-xs px-2.5 py-1 rounded-full border transition-colors ${activeCategory === "all" ? "bg-indigo-500 text-white border-indigo-500" : "border-border text-muted-foreground hover:text-foreground hover:border-foreground/30"}`}
+          >
+            全部 ({bySource.length})
+          </button>
+
+          {/* Uncategorized */}
+          <button
+            onClick={() => setActiveCategory(UNCATEGORIZED)}
+            className={`text-xs px-2.5 py-1 rounded-full border transition-colors ${activeCategory === UNCATEGORIZED ? "bg-indigo-500 text-white border-indigo-500" : "border-border text-muted-foreground hover:text-foreground hover:border-foreground/30"}`}
+          >
+            未分类 ({uncategorizedCount})
+          </button>
+
+          {/* Custom categories */}
+          {categories.map(cat => (
+            <div key={cat} className="group relative flex items-center">
+              <button
+                onClick={() => setActiveCategory(cat)}
+                className={`text-xs px-2.5 py-1 rounded-full border transition-colors pr-6 ${activeCategory === cat ? "bg-indigo-500 text-white border-indigo-500" : "border-border text-muted-foreground hover:text-foreground hover:border-foreground/30"}`}
+              >
+                {cat} ({bySource.filter(i => i.category === cat).length})
+              </button>
+              {/* Delete category button */}
+              <button
+                onClick={() => handleDeleteCategory(cat)}
+                title="删除分类"
+                className={`absolute right-1.5 top-1/2 -translate-y-1/2 opacity-0 group-hover:opacity-100 transition-opacity ${activeCategory === cat ? "text-white/70 hover:text-white" : "text-muted-foreground hover:text-destructive"}`}
+              >
+                <X className="h-2.5 w-2.5" />
+              </button>
+            </div>
+          ))}
+
+          {/* Add category */}
+          {showCatInput ? (
+            <div className="flex items-center gap-1">
+              <Input
+                autoFocus
+                value={newCatName}
+                onChange={e => setNewCatName(e.target.value)}
+                onKeyDown={e => { if (e.key === "Enter") handleAddCategory(); if (e.key === "Escape") { setShowCatInput(false); setNewCatName(""); } }}
+                placeholder="分类名称…"
+                className="h-7 text-xs w-28"
+              />
+              <button onClick={handleAddCategory} className="text-emerald-600 hover:text-emerald-700"><Check className="h-4 w-4" /></button>
+              <button onClick={() => { setShowCatInput(false); setNewCatName(""); }} className="text-muted-foreground hover:text-destructive"><X className="h-4 w-4" /></button>
+            </div>
+          ) : (
+            <button
+              onClick={() => setShowCatInput(true)}
+              className="text-xs px-2 py-1 rounded-full border border-dashed border-muted-foreground/40 text-muted-foreground hover:text-foreground hover:border-foreground/40 transition-colors flex items-center gap-1"
+            >
+              <FolderPlus className="h-3 w-3" />新建分类
+            </button>
+          )}
+        </div>
+      </div>
+
       {/* Search + actions */}
       <div className="flex flex-col sm:flex-row items-start sm:items-center gap-2 mb-4">
         <div className="relative flex-1 w-full sm:w-auto">
@@ -320,6 +489,15 @@ export default function Results() {
           <Input placeholder="搜索 URL、标题、变量、备注…" value={query} onChange={e => setQuery(e.target.value)} className="pl-8 h-8 text-sm" />
         </div>
         <div className="flex items-center gap-1.5 shrink-0 flex-wrap">
+          {/* Select mode toggle */}
+          <Button
+            variant={selectMode ? "default" : "outline"}
+            size="sm"
+            className="h-8 text-xs gap-1.5"
+            onClick={() => selectMode ? exitSelectMode() : setSelectMode(true)}
+          >
+            <CheckSquare className="h-3.5 w-3.5" />{selectMode ? "退出选择" : "选择"}
+          </Button>
           <Button variant="outline" size="sm" className="h-8 text-xs gap-1.5" onClick={handleExportCsv} disabled={items.length === 0}>
             <Download className="h-3.5 w-3.5" />CSV
           </Button>
@@ -338,6 +516,40 @@ export default function Results() {
         </div>
       </div>
 
+      {/* ── Select mode action bar ───────────────────────────────────────────── */}
+      {selectMode && (
+        <div className="mb-4 flex items-center gap-3 flex-wrap rounded-lg border border-indigo-200 bg-indigo-50/50 px-4 py-2.5">
+          <span className="text-sm font-medium text-indigo-700">
+            已选 {selectedIds.size} 条
+          </span>
+          <div className="flex items-center gap-2 flex-1 flex-wrap">
+            <MoveRight className="h-4 w-4 text-indigo-400 shrink-0" />
+            <span className="text-xs text-muted-foreground whitespace-nowrap">移动到分类</span>
+            <select
+              value={moveTarget}
+              onChange={e => setMoveTarget(e.target.value)}
+              className="border border-input rounded-md px-2 py-1 text-xs bg-background h-7"
+            >
+              <option value="">-- 选择目标分类 --</option>
+              <option value={UNCATEGORIZED}>未分类（移除分类）</option>
+              {categories.map(cat => <option key={cat} value={cat}>{cat}</option>)}
+            </select>
+            <Button
+              size="sm"
+              className="h-7 text-xs gap-1"
+              disabled={selectedIds.size === 0 || !moveTarget}
+              onClick={handleMoveSelected}
+            >
+              <Check className="h-3 w-3" />确认移动
+            </Button>
+          </div>
+          <div className="flex items-center gap-1.5">
+            <Button variant="ghost" size="sm" className="h-7 text-xs" onClick={() => setSelectedIds(new Set(filtered.map(i => i.id)))}>全选</Button>
+            <Button variant="ghost" size="sm" className="h-7 text-xs" onClick={() => setSelectedIds(new Set())}>取消全选</Button>
+          </div>
+        </div>
+      )}
+
       {/* Content */}
       {items.length === 0 ? (
         <div className="flex flex-col items-center justify-center py-24 text-muted-foreground border-2 border-dashed rounded-xl">
@@ -349,20 +561,18 @@ export default function Results() {
       ) : filtered.length === 0 ? (
         <div className="flex flex-col items-center justify-center py-16 text-muted-foreground">
           <Search className="h-8 w-8 mb-3 opacity-30" />
-          <p className="text-sm">没有匹配"{query}"的结果</p>
+          <p className="text-sm">没有匹配的结果</p>
         </div>
       ) : sourceTab === "parallel" ? (
-        // Grouped by track label
         <div>
           {Object.entries(parallelGroups).map(([label, groupItems]) => (
-            <TrackGroup key={label} label={label} items={groupItems} onDelete={handleDelete} onUpdate={handleUpdate} />
+            <TrackGroup key={label} label={label} items={groupItems} onDelete={handleDelete} onUpdate={handleUpdate}
+              selectedIds={selectedIds} onSelect={toggleSelect} selectMode={selectMode} />
           ))}
         </div>
       ) : (
-        // Flat list (all / single)
         <div className="space-y-2">
-          {sourceTab === "all" && singleCount > 0 && parallelCount > 0 && (
-            // Show section separators in "all" view
+          {sourceTab === "all" && singleCount > 0 && parallelCount > 0 && activeCategory === "all" ? (
             (() => {
               const singleItems = filtered.filter(i => i.source === "single");
               const parallelItems = filtered.filter(i => i.source === "parallel");
@@ -376,7 +586,7 @@ export default function Results() {
                         <span className="text-xs text-muted-foreground">{singleItems.length} 条</span>
                       </div>
                       <div className="space-y-2">
-                        {singleItems.map(item => <ItemCard key={item.id} item={item} onDelete={() => handleDelete(item.id)} onUpdate={p => handleUpdate(item.id, p)} />)}
+                        {singleItems.map(item => <ItemCard key={item.id} item={item} onDelete={() => handleDelete(item.id)} onUpdate={p => handleUpdate(item.id, p)} selected={selectedIds.has(item.id)} onSelect={() => toggleSelect(item.id)} selectMode={selectMode} />)}
                       </div>
                     </div>
                   )}
@@ -388,17 +598,18 @@ export default function Results() {
                         <span className="text-xs text-muted-foreground">{parallelItems.length} 条</span>
                       </div>
                       <div className="space-y-2">
-                        {parallelItems.map(item => <ItemCard key={item.id} item={item} onDelete={() => handleDelete(item.id)} onUpdate={p => handleUpdate(item.id, p)} />)}
+                        {parallelItems.map(item => <ItemCard key={item.id} item={item} onDelete={() => handleDelete(item.id)} onUpdate={p => handleUpdate(item.id, p)} selected={selectedIds.has(item.id)} onSelect={() => toggleSelect(item.id)} selectMode={selectMode} />)}
                       </div>
                     </div>
                   )}
                 </>
               );
             })()
+          ) : (
+            filtered.map(item => (
+              <ItemCard key={item.id} item={item} onDelete={() => handleDelete(item.id)} onUpdate={p => handleUpdate(item.id, p)} selected={selectedIds.has(item.id)} onSelect={() => toggleSelect(item.id)} selectMode={selectMode} />
+            ))
           )}
-          {(sourceTab !== "all" || singleCount === 0 || parallelCount === 0) && filtered.map(item => (
-            <ItemCard key={item.id} item={item} onDelete={() => handleDelete(item.id)} onUpdate={p => handleUpdate(item.id, p)} />
-          ))}
         </div>
       )}
     </div>

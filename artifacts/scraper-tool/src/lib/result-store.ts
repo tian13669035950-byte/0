@@ -14,9 +14,11 @@ export interface CollectedItem {
   paragraphs: string[];
   links: Array<{ text: string; href: string }>;
   note: string;
+  category?: string; // undefined / "" = 未分类
 }
 
 const KEY = "scraper-collected-v1";
+const CAT_KEY = "scraper-categories-v1";
 const BACKUP_API = "/api/store/backup";
 
 export const loadItems = (): CollectedItem[] => {
@@ -27,6 +29,35 @@ export const loadItems = (): CollectedItem[] => {
 const save = (items: CollectedItem[]) => {
   localStorage.setItem(KEY, JSON.stringify(items));
   syncToBackend(items).catch(() => {});
+};
+
+// ── Category management ────────────────────────────────────────────────────────
+
+export const loadCategories = (): string[] => {
+  try { return JSON.parse(localStorage.getItem(CAT_KEY) ?? "[]"); } catch { return []; }
+};
+
+const saveCats = (cats: string[]) => localStorage.setItem(CAT_KEY, JSON.stringify(cats));
+
+export const addCategory = (name: string): void => {
+  const cats = loadCategories();
+  if (!cats.includes(name)) saveCats([...cats, name]);
+};
+
+export const renameCategory = (oldName: string, newName: string): void => {
+  saveCats(loadCategories().map(c => c === oldName ? newName : c));
+  save(loadItems().map(i => i.category === oldName ? { ...i, category: newName } : i));
+};
+
+export const deleteCategory = (name: string): void => {
+  saveCats(loadCategories().filter(c => c !== name));
+  // Remove category tag from items (they become uncategorized)
+  save(loadItems().map(i => i.category === name ? { ...i, category: undefined } : i));
+};
+
+export const moveItemsToCategory = (ids: Set<string>, category: string): void => {
+  const cat = category === "" ? undefined : category;
+  save(loadItems().map(i => ids.has(i.id) ? { ...i, category: cat } : i));
 };
 
 // ── Backend file sync ─────────────────────────────────────────────────────────
@@ -42,7 +73,6 @@ export const syncToBackend = async (items?: CollectedItem[]): Promise<void> => {
 };
 
 // On startup: load from backend file, merge with whatever is in localStorage
-// (items already in localStorage take precedence; new items from file are appended)
 export const syncFromBackend = async (): Promise<void> => {
   try {
     const resp = await fetch(BACKUP_API);
@@ -78,8 +108,10 @@ export const addRawItemToStore = (item: CollectedItem): void => save([item, ...l
 
 export const deleteItemFromStore = (id: string) => save(loadItems().filter(i => i.id !== id));
 
-export const updateItemInStore = (id: string, patch: Partial<Pick<CollectedItem, "note" | "capturedVars">>) =>
-  save(loadItems().map(i => i.id === id ? { ...i, ...patch } : i));
+export const updateItemInStore = (
+  id: string,
+  patch: Partial<Pick<CollectedItem, "note" | "capturedVars" | "category">>,
+) => save(loadItems().map(i => i.id === id ? { ...i, ...patch } : i));
 
 export const clearStore = () => {
   localStorage.removeItem(KEY);

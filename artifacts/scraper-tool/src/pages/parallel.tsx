@@ -10,6 +10,7 @@ import {
 } from "lucide-react";
 import { addItemToStore, fromScrapeResult } from "@/lib/result-store";
 import type { ScrapeResult } from "@workspace/api-client-react/src/generated/api.schemas";
+import { useParallel, type TrackState } from "@/lib/parallel-context";
 
 // ─── Types ───────────────────────────────────────────────────────────────────
 interface Step {
@@ -20,11 +21,6 @@ interface Step {
 }
 interface SavedSequence { name: string; steps: Step[]; savedAt: string; url?: string; }
 interface TrackConfig { id: string; seqName: string; urlOverride: string; }
-interface TrackState {
-  activeStep: number | null; doneSteps: Record<number, boolean>;
-  capturedVars: Record<string, string>; done: boolean;
-  error?: string; duration?: number; screenshot?: string; liveUrl?: string;
-}
 interface ParallelPreset {
   name: string; savedAt: string;
   tracks: Array<{ seqName: string; urlOverride: string }>;
@@ -57,16 +53,18 @@ function cleanStep(step: Step): Step {
 // ─── Component ────────────────────────────────────────────────────────────────
 export default function Parallel() {
   const { toast } = useToast();
+  const {
+    running, loopRunning, loopProgress, trackStates,
+    setRunning, setLoopRunning, setLoopProgress, setTrackStates,
+    abortRef, watchEsRefs, closeWatchTimerRef, stopLoopRef,
+    closeAllWatch,
+  } = useParallel();
+
   const [sequences, setSequences] = useState<SavedSequence[]>(loadSequences);
   const [tracks, setTracks] = useState<TrackConfig[]>([
     { id: "a", seqName: "", urlOverride: "" },
     { id: "b", seqName: "", urlOverride: "" },
   ]);
-  const [running, setRunning] = useState(false);
-  const [trackStates, setTrackStates] = useState<TrackState[]>([]);
-  const abortRef = useRef<AbortController | null>(null);
-  const watchEsRefs = useRef<Map<number, EventSource>>(new Map());
-  const closeWatchTimerRef = useRef<ReturnType<typeof setTimeout> | null>(null);
 
   // ── Race mode ────────────────────────────────────────────────────────────────
   const [raceMode, setRaceMode] = useState(false);
@@ -75,9 +73,6 @@ export default function Parallel() {
   const [loopEnabled, setLoopEnabled] = useState(false);
   const [loopCount, setLoopCount] = useState(3);
   const [loopDelayMs, setLoopDelayMs] = useState(3000);
-  const [loopRunning, setLoopRunning] = useState(false);
-  const [loopProgress, setLoopProgress] = useState<{ cur: number; tot: number; ok: number; fail: number } | null>(null);
-  const stopLoopRef = useRef(false);
 
   // ── Preset state ────────────────────────────────────────────────────────────
   const [presets, setPresets] = useState<ParallelPreset[]>(loadPresets);
@@ -88,10 +83,16 @@ export default function Parallel() {
   const proxyUrl = localStorage.getItem("scraper-proxy") ?? "";
   const headedMode = localStorage.getItem("scraper-headed") === "1";
 
-  // ── Watch helpers ────────────────────────────────────────────────────────────
-  const closeAllWatch = useCallback(() => { watchEsRefs.current.forEach(es => es.close()); watchEsRefs.current.clear(); }, []);
-  useEffect(() => () => closeAllWatch(), [closeAllWatch]);
+  // ── Unmount: only close watch EventSources if not still running ──────────────
+  // We track running in a ref so the cleanup effect captures the latest value.
+  const isActiveRef = useRef(false);
+  useEffect(() => { isActiveRef.current = running || loopRunning; }, [running, loopRunning]);
+  useEffect(() => () => {
+    if (!isActiveRef.current) closeAllWatch();
+    // If still running, leave watch streams open; user can resume viewing on return
+  }, [closeAllWatch]);
 
+  // ── Watch helpers ────────────────────────────────────────────────────────────
   const openWatch = useCallback((trackIdx: number, watchId: string) => {
     watchEsRefs.current.get(trackIdx)?.close();
     const es = new EventSource(`/api/scrape/watch/${watchId}`);
@@ -109,7 +110,7 @@ export default function Parallel() {
     };
     es.onerror = () => { es.close(); watchEsRefs.current.delete(trackIdx); };
     watchEsRefs.current.set(trackIdx, es);
-  }, []);
+  }, [watchEsRefs, setTrackStates]);
 
   // ── Track helpers ────────────────────────────────────────────────────────────
   const addTrack = () => { if (tracks.length < 6) setTracks(t => [...t, { id: crypto.randomUUID(), seqName: "", urlOverride: "" }]); };
@@ -143,7 +144,6 @@ export default function Parallel() {
     };
 
     let succeeded = false;
-    // raceWon: set when race mode triggers so we don't show an error toast for the abort
     let raceWon = false;
     try {
       const resp = await fetch("/api/parallel/stream", { method: "POST", headers: { "Content-Type": "application/json" }, body: JSON.stringify(payload), signal: ac.signal });
@@ -191,7 +191,6 @@ export default function Parallel() {
       }
       succeeded = true;
     } catch (e) {
-      // Race mode abort is intentional — don't show an error toast, count as success
       if (raceWon) {
         succeeded = true;
       } else if (!(e instanceof DOMException && e.name === "AbortError")) {
@@ -200,13 +199,11 @@ export default function Parallel() {
     } finally {
       setRunning(false);
       abortRef.current = null;
-      // Cancel any pending close-watch timer from a previous run, then schedule a new one.
-      // This prevents a previous timer from closing watch windows opened by the next loop iteration.
       if (closeWatchTimerRef.current) clearTimeout(closeWatchTimerRef.current);
       closeWatchTimerRef.current = setTimeout(() => closeAllWatch(), 3000);
     }
     return succeeded;
-  }, [tracks, sequences, proxyUrl, headedMode, raceMode, toast, openWatch, closeAllWatch]);
+  }, [tracks, sequences, proxyUrl, headedMode, raceMode, toast, openWatch, closeAllWatch, abortRef, setRunning, setTrackStates, closeWatchTimerRef]);
 
   // ── Single run ───────────────────────────────────────────────────────────────
   const runParallel = useCallback(async () => {
@@ -215,9 +212,6 @@ export default function Parallel() {
   }, [executeOnce, tracks.length, toast]);
 
   // ── Loop run ─────────────────────────────────────────────────────────────────
-  // Fixed-interval mode: each cycle starts exactly loopDelayMs after the previous
-  // cycle started. A hard timeout aborts the current execution if it exceeds the
-  // interval — the loop always moves on regardless of how long scraping takes.
   const runLoop = useCallback(async () => {
     stopLoopRef.current = false;
     setLoopRunning(true);
@@ -227,13 +221,9 @@ export default function Parallel() {
       setLoopProgress({ cur: i + 1, tot: loopCount, ok, fail });
       const cycleStart = Date.now();
 
-      // Hard deadline: forcibly abort the current execution when the interval expires.
-      // This guarantees the loop never gets stuck waiting for a slow/hung page.
       let cycleTimer: ReturnType<typeof setTimeout> | null = null;
       if (loopDelayMs > 0) {
-        cycleTimer = setTimeout(() => {
-          abortRef.current?.abort();
-        }, loopDelayMs);
+        cycleTimer = setTimeout(() => { abortRef.current?.abort(); }, loopDelayMs);
       }
 
       const succeeded = await executeOnce();
@@ -243,8 +233,6 @@ export default function Parallel() {
 
       if (i < loopCount - 1 && !stopLoopRef.current) {
         const remaining = loopDelayMs - (Date.now() - cycleStart);
-        // Always wait at least 300ms so React state from the previous run
-        // settles before the next executeOnce() begins.
         await sleep(Math.max(300, remaining));
       }
     }
@@ -254,12 +242,11 @@ export default function Parallel() {
       title: stopLoopRef.current ? "循环已停止" : "循环完成",
       description: `成功 ${ok} 次${fail > 0 ? `，失败 ${fail} 次` : ""}`,
     });
-  }, [executeOnce, loopCount, loopDelayMs, toast]);
+  }, [executeOnce, loopCount, loopDelayMs, toast, stopLoopRef, setLoopRunning, setLoopProgress, abortRef]);
 
   const cancel = () => {
     stopLoopRef.current = true;
     abortRef.current?.abort();
-    // Close watch windows immediately instead of waiting for the 3-second timer
     if (closeWatchTimerRef.current) clearTimeout(closeWatchTimerRef.current);
     closeAllWatch();
   };
@@ -361,6 +348,7 @@ export default function Parallel() {
                       <span className="text-xs text-muted-foreground ml-2">
                         {preset.tracks.length} 条轨道
                         {preset.loopEnabled ? ` · 循环 ${preset.loopCount} 次 / ${Math.round((preset.loopDelayMs ?? 0) / 1000)}s` : ""}
+                        {preset.raceMode ? " · 竞速" : ""}
                         {" · "}{new Date(preset.savedAt).toLocaleDateString("zh-CN")}
                       </span>
                     </div>
@@ -448,13 +436,24 @@ export default function Parallel() {
                     {ts && (
                       <div className="space-y-2">
                         {ts.error ? (
-                          <div className="flex items-start gap-1.5 text-xs text-destructive"><AlertCircle className="h-3.5 w-3.5 mt-0.5 shrink-0" /><span className="break-all">{ts.error}</span></div>
+                          <div className="flex items-center gap-1.5 text-xs text-destructive">
+                            <AlertCircle className="h-3.5 w-3.5 shrink-0" />
+                            <span className="break-all">{ts.error}</span>
+                          </div>
                         ) : ts.done ? (
-                          <div className="flex items-center gap-1.5 text-xs text-green-600 font-medium"><CheckCircle2 className="h-3.5 w-3.5" />完成{ts.duration ? ` · ${ts.duration}ms` : ""}</div>
-                        ) : (
-                          <div className="flex items-center gap-1.5 text-xs text-primary"><Loader2 className="h-3.5 w-3.5 animate-spin" />{ts.activeStep !== null ? `步骤 ${ts.activeStep + 1} 执行中` : "准备执行..."}</div>
-                        )}
-                        {seq && seq.steps.length > 0 && (
+                          <div className="flex items-center gap-1.5 text-xs text-emerald-600">
+                            <CheckCircle2 className="h-3.5 w-3.5 shrink-0" />
+                            完成{ts.duration ? `（${ts.duration}ms）` : ""}
+                          </div>
+                        ) : isActive ? (
+                          <div className="flex items-center gap-1.5 text-xs text-primary">
+                            <Loader2 className="h-3.5 w-3.5 shrink-0 animate-spin" />
+                            {ts.activeStep != null ? `步骤 ${ts.activeStep + 1}` : "执行中..."}
+                          </div>
+                        ) : null}
+
+                        {/* Step dots */}
+                        {seq && seq.steps.length > 0 && (running || ts.done || ts.error) && (
                           <div className="flex flex-wrap gap-1">
                             {seq.steps.map((_, i) => (
                               <div key={i} title={`步骤 ${i + 1}`} className={`w-2.5 h-2.5 rounded-full transition-all duration-200 ${i === ts.activeStep ? "bg-primary scale-125 animate-pulse" : ts.doneSteps[i] === true ? "bg-green-400" : ts.doneSteps[i] === false ? "bg-red-400" : "bg-muted-foreground/20"}`} />
@@ -545,7 +544,6 @@ export default function Parallel() {
                 )}
               </div>
 
-              {/* Divider */}
               <div className="border-t border-border/40" />
 
               {/* Loop toggle */}
@@ -598,13 +596,6 @@ export default function Parallel() {
                 <Save className="h-3.5 w-3.5" />保存当前配置
               </Button>
             </div>
-          )}
-
-          {proxyUrl && (
-            <p className="mt-3 text-xs text-amber-600 flex items-center gap-1.5">
-              <span className="w-1.5 h-1.5 rounded-full bg-amber-500 shrink-0" />
-              所有轨道将通过代理 {proxyUrl} 发送
-            </p>
           )}
         </>
       )}

@@ -10,6 +10,7 @@ import Parallel from "@/pages/parallel";
 import Results from "@/pages/results";
 import { Layout } from "@/components/layout";
 import { syncFromBackend } from "@/lib/result-store";
+import { ParallelProvider } from "@/lib/parallel-context";
 
 const queryClient = new QueryClient();
 
@@ -28,8 +29,6 @@ function Router() {
 }
 
 function App() {
-  // On startup, merge data from the backend file into localStorage.
-  // This restores data that survived a source-code update or browser cache clear.
   useEffect(() => {
     syncFromBackend();
   }, []);
@@ -37,9 +36,11 @@ function App() {
   return (
     <QueryClientProvider client={queryClient}>
       <TooltipProvider>
-        <WouterRouter base={import.meta.env.BASE_URL.replace(/\/$/, "")}>
-          <Router />
-        </WouterRouter>
+        <ParallelProvider>
+          <WouterRouter base={import.meta.env.BASE_URL.replace(/\/$/, "")}>
+            <Router />
+          </WouterRouter>
+        </ParallelProvider>
         <Toaster />
       </TooltipProvider>
     </QueryClientProvider>
