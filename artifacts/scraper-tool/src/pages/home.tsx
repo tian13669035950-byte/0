@@ -23,6 +23,7 @@ import {
   RefreshCw, Camera, ChevronRight, MousePointer2, ArrowLeftRight, Shield,
 } from "lucide-react";
 import type { ScrapeResult } from "@workspace/api-client-react/src/generated/api.schemas";
+import { addItemToStore, fromScrapeResult } from "@/lib/result-store";
 
 // ─── Recorder types ───────────────────────────────────────────────────────────
 type RecordedStep = {
@@ -361,6 +362,8 @@ export default function Home() {
   const addSnap = useCallback((data: ScrapeResult, iteration?: number, loopTotal?: number) => {
     const snap: Snapshot = { id: String(++snapshotIdRef.current), iteration, loopTotal, triggeredAt: new Date().toLocaleTimeString("zh-CN", { hour12: false }), duration: data.duration, result: data };
     setSnapshots((p) => [snap, ...p]); setTriggerCount((c) => c + 1);
+    addItemToStore(fromScrapeResult(data, "single"));
+    window.dispatchEvent(new StorageEvent("storage", { key: "scraper-collected-v1" }));
   }, []);
 
   // ── Streaming scrape helper ────────────────────────────────────────────────

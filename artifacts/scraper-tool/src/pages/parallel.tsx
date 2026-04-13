@@ -4,6 +4,8 @@ import { Input } from "@/components/ui/input";
 import { Card, CardContent, CardHeader, CardTitle } from "@/components/ui/card";
 import { useToast } from "@/hooks/use-toast";
 import { Play, Square, Plus, Trash2, CheckCircle2, AlertCircle, Loader2, GitFork, Monitor } from "lucide-react";
+import { addItemToStore, fromScrapeResult } from "@/lib/result-store";
+import type { ScrapeResult } from "@workspace/api-client-react/src/generated/api.schemas";
 
 interface Step {
   type: string;
@@ -207,7 +209,11 @@ export default function Parallel() {
               if (ev.t === "step_start") ts.activeStep = ev.i as number;
               if (ev.t === "step_done") { ts.activeStep = null; ts.doneSteps = { ...ts.doneSteps, [ev.i as number]: ev.ok as boolean }; }
               if (ev.t === "captured") ts.capturedVars = { ...ts.capturedVars, [ev.varName as string]: ev.value as string };
-              if (ev.t === "result") { ts.done = true; ts.duration = (ev as { duration?: number }).duration; }
+              if (ev.t === "result") {
+                ts.done = true; ts.duration = (ev as { duration?: number }).duration;
+                addItemToStore(fromScrapeResult(ev as unknown as ScrapeResult, "parallel", `轨道 ${TRACK_LABELS[idx]}`));
+                window.dispatchEvent(new StorageEvent("storage", { key: "scraper-collected-v1" }));
+              }
               if (ev.t === "error") { ts.done = true; ts.error = ev.message as string; }
               next[idx] = ts;
               return next;

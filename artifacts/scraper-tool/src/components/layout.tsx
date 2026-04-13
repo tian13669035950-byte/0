@@ -1,10 +1,22 @@
 import { Link, useLocation } from "wouter";
 import { cn } from "@/lib/utils";
-import { Terminal, Clock, Code2, Download, GitFork } from "lucide-react";
+import { Terminal, Clock, Code2, Download, GitFork, LayoutList } from "lucide-react";
 import { ReactNode } from "react";
+import { loadItems } from "@/lib/result-store";
+import { useState, useEffect } from "react";
 
 export function Layout({ children }: { children: ReactNode }) {
   const [location] = useLocation();
+  const [resultCount, setResultCount] = useState(() => loadItems().length);
+
+  useEffect(() => {
+    const onStorage = (e: StorageEvent) => {
+      if (e.key === "scraper-collected-v1") setResultCount(loadItems().length);
+    };
+    window.addEventListener("storage", onStorage);
+    const interval = setInterval(() => setResultCount(loadItems().length), 2000);
+    return () => { window.removeEventListener("storage", onStorage); clearInterval(interval); };
+  }, []);
 
   return (
     <div className="min-h-screen bg-background flex flex-col">
@@ -52,6 +64,23 @@ export function Layout({ children }: { children: ReactNode }) {
             >
               <GitFork className="h-3.5 w-3.5 shrink-0" />
               <span className="text-xs sm:text-sm">并行执行</span>
+            </Link>
+            <Link
+              href="/results"
+              className={cn(
+                "flex items-center gap-1.5 px-2.5 py-1.5 rounded-md transition-colors",
+                location === "/results"
+                  ? "bg-primary/10 text-primary"
+                  : "text-foreground/60 hover:text-foreground hover:bg-muted"
+              )}
+            >
+              <LayoutList className="h-3.5 w-3.5 shrink-0" />
+              <span className="text-xs sm:text-sm">数据汇总</span>
+              {resultCount > 0 && (
+                <span className="inline-flex items-center justify-center h-4 min-w-4 px-1 rounded-full bg-primary text-primary-foreground text-[10px] font-bold leading-none">
+                  {resultCount > 99 ? "99+" : resultCount}
+                </span>
+              )}
             </Link>
           </nav>
           <a

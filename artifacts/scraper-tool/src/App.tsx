@@ -6,6 +6,7 @@ import NotFound from "@/pages/not-found";
 import Home from "@/pages/home";
 import History from "@/pages/history";
 import Parallel from "@/pages/parallel";
+import Results from "@/pages/results";
 import { Layout } from "@/components/layout";
 
 const queryClient = new QueryClient();
@@ -17,6 +18,7 @@ function Router() {
         <Route path="/" component={Home} />
         <Route path="/history" component={History} />
         <Route path="/parallel" component={Parallel} />
+        <Route path="/results" component={Results} />
         <Route component={NotFound} />
       </Switch>
     </Layout>
