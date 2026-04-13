@@ -149,7 +149,6 @@ export default function Home() {
     liveVars: Record<string, string>;
   } | null>(null);
   const [watchId, setWatchId] = useState<string | null>(null);
-  const [watchOpen, setWatchOpen] = useState(false);
   const [watchShot, setWatchShot] = useState("");
   const [watchUrl, setWatchUrl] = useState("");
   const watchEsRef = useRef<EventSource | null>(null);
@@ -425,7 +424,7 @@ export default function Home() {
 
   const openWatch = useCallback((id: string) => {
     if (watchEsRef.current) { watchEsRef.current.close(); watchEsRef.current = null; }
-    setWatchShot(""); setWatchUrl(""); setWatchOpen(true);
+    setWatchShot(""); setWatchUrl("");
     const es = new EventSource(`/api/scrape/watch/${id}`);
     watchEsRef.current = es;
     es.onmessage = (e) => {
@@ -439,7 +438,6 @@ export default function Home() {
 
   const closeWatch = useCallback(() => {
     if (watchEsRef.current) { watchEsRef.current.close(); watchEsRef.current = null; }
-    setWatchOpen(false);
   }, []);
 
   const handleExecEv = useCallback((ev: { t: string; [k: string]: unknown }) => {
@@ -947,20 +945,29 @@ export default function Home() {
             </Card>
           )}
 
-          {/* Live watch button — appears once backend registers the browser */}
+          {/* Inline live browser view — shown during execution once watchId is ready */}
           {isRunning && watchId && (
-            <div className="flex items-center gap-3 px-4 py-2.5 bg-violet-50 border border-violet-200 rounded-lg animate-in fade-in">
-              <span className="relative flex h-2.5 w-2.5 shrink-0">
-                <span className="animate-ping absolute inline-flex h-full w-full rounded-full bg-violet-400 opacity-75" />
-                <span className="relative inline-flex rounded-full h-2.5 w-2.5 bg-violet-500" />
-              </span>
-              <span className="text-sm text-violet-700 font-medium flex-1">后台浏览器正在执行</span>
-              <Button type="button" size="sm" variant="outline"
-                className="h-7 gap-1.5 text-xs border-violet-300 text-violet-700 hover:bg-violet-100"
-                onClick={() => openWatch(watchId)}>
-                <Eye className="h-3.5 w-3.5" />实时查看
-              </Button>
-            </div>
+            <Card className="overflow-hidden border-zinc-700 shadow-md animate-in fade-in">
+              <div className="flex items-center gap-2 px-3 py-2 bg-zinc-900 border-b border-zinc-700 shrink-0">
+                <span className="relative flex h-2 w-2 shrink-0">
+                  <span className="animate-ping absolute inline-flex h-full w-full rounded-full bg-violet-400 opacity-75" />
+                  <span className="relative inline-flex rounded-full h-2 w-2 bg-violet-500" />
+                </span>
+                <span className="text-xs font-semibold text-violet-300">实时浏览器视图</span>
+                {watchUrl && <span className="flex-1 text-[10px] font-mono text-zinc-400 truncate">{watchUrl}</span>}
+                <span className="text-[10px] text-zinc-500 hidden sm:inline">只读 · 不影响执行</span>
+              </div>
+              <div className="bg-zinc-950 flex items-center justify-center" style={{ aspectRatio: "16/9" }}>
+                {!watchShot ? (
+                  <div className="flex flex-col items-center gap-2">
+                    <Loader2 className="h-6 w-6 animate-spin text-violet-400" />
+                    <span className="text-xs text-zinc-400">等待浏览器截图…</span>
+                  </div>
+                ) : (
+                  <img src={watchShot} alt="后台浏览器" className="w-full h-full block" draggable={false} />
+                )}
+              </div>
+            </Card>
           )}
 
           {/* Live execution vars — shown during single run or loop */}
@@ -1172,58 +1179,17 @@ export default function Home() {
             </div>
           )}
 
-          {isRunning && !loopProgress && (
+          {isRunning && !loopProgress && !watchId && (
             <Card className="flex flex-col items-center justify-center py-16 border-dashed border-2 bg-muted/10 animate-in fade-in">
               <Loader2 className="h-10 w-10 text-primary animate-spin mb-4" />
               <h3 className="text-base font-medium mb-1">正在执行步骤序列</h3>
-              <p className="text-sm text-muted-foreground">浏览器正在按顺序模拟操作...</p>
+              <p className="text-sm text-muted-foreground">浏览器启动中，稍后显示实时画面…</p>
             </Card>
           )}
         </div>
       </div>
     </div>
 
-    {/* ── Live Watch Modal ─────────────────────────────────────────────────── */}
-    {watchOpen && (
-      <div className="fixed inset-0 z-40 flex flex-col bg-black/80 backdrop-blur-sm animate-in fade-in">
-        {/* Top bar */}
-        <div className="flex items-center gap-2 px-4 py-2.5 border-b border-zinc-700 bg-zinc-900 shrink-0">
-          <span className="relative flex h-2.5 w-2.5 shrink-0">
-            <span className="animate-ping absolute inline-flex h-full w-full rounded-full bg-violet-400 opacity-75" />
-            <span className="relative inline-flex rounded-full h-2.5 w-2.5 bg-violet-500" />
-          </span>
-          <span className="text-sm font-semibold text-violet-300">实时浏览器视图</span>
-          {watchUrl && (
-            <span className="flex-1 text-[11px] font-mono text-zinc-400 truncate">{watchUrl}</span>
-          )}
-          <span className="text-xs text-zinc-500 hidden sm:inline">只读 · 不影响执行</span>
-          <Button type="button" size="sm" variant="ghost"
-            className="h-7 gap-1.5 text-xs text-zinc-400 hover:text-zinc-100 ml-auto"
-            onClick={closeWatch}>
-            <X className="h-4 w-4" />关闭
-          </Button>
-        </div>
-
-        {/* Screenshot */}
-        <div className="flex-1 min-h-0 flex items-center justify-center bg-zinc-950 p-4">
-          {!watchShot ? (
-            <div className="flex flex-col items-center gap-3">
-              <Loader2 className="h-8 w-8 animate-spin text-violet-400" />
-              <span className="text-sm text-zinc-400">等待浏览器截图…</span>
-            </div>
-          ) : (
-            <div className="relative w-full" style={{ aspectRatio: "16/9", maxHeight: "100%", maxWidth: "calc((100vh - 120px) * 16 / 9)" }}>
-              <img
-                src={watchShot}
-                alt="后台浏览器"
-                className="w-full h-full block rounded-sm shadow-xl"
-                draggable={false}
-              />
-            </div>
-          )}
-        </div>
-      </div>
-    )}
 
     {/* ── Visual Recorder Overlay ─────────────────────────────────────────── */}
     {isRecording && (
