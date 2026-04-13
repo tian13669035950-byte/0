@@ -20,6 +20,7 @@ import {
   Play, ArrowUp, ArrowDown, Timer, Save, FolderOpen, X,
   Keyboard, ListOrdered, Eye, MoveDown, Type, Activity,
   Video, StopCircle, Undo2, Link2, Download, Upload,
+  RefreshCw, Camera, ChevronRight, MousePointer2,
 } from "lucide-react";
 import type { ScrapeResult } from "@workspace/api-client-react/src/generated/api.schemas";
 
@@ -37,29 +38,41 @@ type RecordedStep = {
 // ─── Step definitions ────────────────────────────────────────────────────────
 
 const STEP_TYPES = [
-  { type: "click",    label: "点击",     icon: MousePointerClick, color: "blue",   desc: "点击页面上的某个按钮或链接" },
-  { type: "listen",   label: "监听",     icon: Eye,               color: "purple", desc: "等到某个元素出现/消失，或网络空闲" },
-  { type: "capture",  label: "读取保存", icon: Crosshair,         color: "teal",   desc: "读取元素内容，保存为变量供后续步骤使用" },
-  { type: "navigate", label: "跳转网址", icon: Globe,             color: "indigo", desc: "在同一浏览器内跳转到另一个网址" },
-  { type: "type",     label: "输入文字", icon: Type,              color: "green",  desc: "在输入框填入文字，支持 ${变量名} 引用保存的值" },
-  { type: "key",      label: "按键",     icon: Keyboard,          color: "orange", desc: "模拟键盘按键，如回车、Tab" },
-  { type: "select",   label: "下拉选择", icon: ListOrdered,       color: "cyan",   desc: "选择下拉框中的某个选项" },
-  { type: "scroll",   label: "滚动",     icon: MoveDown,          color: "pink",   desc: "滚动到指定元素位置" },
-  { type: "hover",    label: "悬停",     icon: Eye,               color: "yellow", desc: "将鼠标悬停在元素上" },
+  { type: "click",       label: "点击",     icon: MousePointerClick, color: "blue",    desc: "点击页面上的某个按钮或链接" },
+  { type: "doubleclick", label: "双击",     icon: MousePointer2,     color: "blue",    desc: "双击元素（展开节点、进入编辑等）" },
+  { type: "rightclick",  label: "右键",     icon: MousePointerClick, color: "rose",    desc: "在元素上按鼠标右键，调出上下文菜单" },
+  { type: "type",        label: "输入文字", icon: Type,              color: "green",   desc: "在输入框填入文字，支持 ${变量名} 引用保存的值" },
+  { type: "key",         label: "按键",     icon: Keyboard,          color: "orange",  desc: "模拟键盘按键，如回车、Tab" },
+  { type: "select",      label: "下拉选择", icon: ListOrdered,       color: "cyan",    desc: "选择下拉框中的某个选项" },
+  { type: "scroll",      label: "滚动",     icon: MoveDown,          color: "pink",    desc: "滚动到指定元素位置" },
+  { type: "hover",       label: "悬停",     icon: Eye,               color: "yellow",  desc: "将鼠标悬停在元素上" },
+  { type: "navigate",    label: "跳转网址", icon: Globe,             color: "indigo",  desc: "在同一浏览器内跳转到另一个网址" },
+  { type: "goback",      label: "后退",     icon: Undo2,             color: "slate",   desc: "浏览器后退到上一个页面（等同于点后退按钮）" },
+  { type: "goforward",   label: "前进",     icon: ChevronRight,      color: "slate",   desc: "浏览器前进到下一个页面" },
+  { type: "reload",      label: "刷新",     icon: RefreshCw,         color: "sky",     desc: "刷新当前页面，重新加载内容" },
+  { type: "wait",        label: "等待",     icon: Timer,             color: "amber",   desc: "暂停指定毫秒数，等待页面动画或延迟渲染" },
+  { type: "listen",      label: "监听",     icon: Eye,               color: "purple",  desc: "等到某个元素出现/消失，或网络空闲" },
+  { type: "capture",     label: "读取保存", icon: Crosshair,         color: "teal",    desc: "读取元素内容，保存为变量供后续步骤使用" },
+  { type: "screenshot",  label: "截图记录", icon: Camera,            color: "violet",  desc: "在此处暂停并记录截图状态（实时监控可见）" },
 ] as const;
 
 type StepType = typeof STEP_TYPES[number]["type"];
 
 const COLOR_MAP: Record<string, { bg: string; border: string; bar: string; btn: string }> = {
-  blue:   { bg: "bg-blue-50/60",   border: "border-blue-200",  bar: "bg-blue-400",   btn: "text-blue-600 border-blue-200 hover:bg-blue-50"   },
-  purple: { bg: "bg-purple-50/60", border: "border-purple-200",bar: "bg-purple-400", btn: "text-purple-600 border-purple-200 hover:bg-purple-50"},
-  teal:   { bg: "bg-teal-50/60",   border: "border-teal-200",  bar: "bg-teal-400",   btn: "text-teal-600 border-teal-200 hover:bg-teal-50"   },
-  indigo: { bg: "bg-indigo-50/60", border: "border-indigo-200",bar: "bg-indigo-400", btn: "text-indigo-600 border-indigo-200 hover:bg-indigo-50"},
-  green:  { bg: "bg-green-50/60",  border: "border-green-200", bar: "bg-green-400",  btn: "text-green-600 border-green-200 hover:bg-green-50" },
-  orange: { bg: "bg-orange-50/60", border: "border-orange-200",bar: "bg-orange-400", btn: "text-orange-600 border-orange-200 hover:bg-orange-50"},
-  cyan:   { bg: "bg-cyan-50/60",   border: "border-cyan-200",  bar: "bg-cyan-400",   btn: "text-cyan-600 border-cyan-200 hover:bg-cyan-50"   },
-  pink:   { bg: "bg-pink-50/60",   border: "border-pink-200",  bar: "bg-pink-400",   btn: "text-pink-600 border-pink-200 hover:bg-pink-50"   },
-  yellow: { bg: "bg-yellow-50/60", border: "border-yellow-200",bar: "bg-yellow-400", btn: "text-yellow-600 border-yellow-200 hover:bg-yellow-50"},
+  blue:   { bg: "bg-blue-50/60",   border: "border-blue-200",   bar: "bg-blue-400",   btn: "text-blue-600 border-blue-200 hover:bg-blue-50"     },
+  purple: { bg: "bg-purple-50/60", border: "border-purple-200", bar: "bg-purple-400", btn: "text-purple-600 border-purple-200 hover:bg-purple-50" },
+  teal:   { bg: "bg-teal-50/60",   border: "border-teal-200",   bar: "bg-teal-400",   btn: "text-teal-600 border-teal-200 hover:bg-teal-50"     },
+  indigo: { bg: "bg-indigo-50/60", border: "border-indigo-200", bar: "bg-indigo-400", btn: "text-indigo-600 border-indigo-200 hover:bg-indigo-50" },
+  green:  { bg: "bg-green-50/60",  border: "border-green-200",  bar: "bg-green-400",  btn: "text-green-600 border-green-200 hover:bg-green-50"   },
+  orange: { bg: "bg-orange-50/60", border: "border-orange-200", bar: "bg-orange-400", btn: "text-orange-600 border-orange-200 hover:bg-orange-50" },
+  cyan:   { bg: "bg-cyan-50/60",   border: "border-cyan-200",   bar: "bg-cyan-400",   btn: "text-cyan-600 border-cyan-200 hover:bg-cyan-50"     },
+  pink:   { bg: "bg-pink-50/60",   border: "border-pink-200",   bar: "bg-pink-400",   btn: "text-pink-600 border-pink-200 hover:bg-pink-50"     },
+  yellow: { bg: "bg-yellow-50/60", border: "border-yellow-200", bar: "bg-yellow-400", btn: "text-yellow-600 border-yellow-200 hover:bg-yellow-50" },
+  rose:   { bg: "bg-rose-50/60",   border: "border-rose-200",   bar: "bg-rose-400",   btn: "text-rose-600 border-rose-200 hover:bg-rose-50"     },
+  slate:  { bg: "bg-slate-50/60",  border: "border-slate-200",  bar: "bg-slate-400",  btn: "text-slate-600 border-slate-200 hover:bg-slate-50"   },
+  sky:    { bg: "bg-sky-50/60",    border: "border-sky-200",    bar: "bg-sky-400",    btn: "text-sky-600 border-sky-200 hover:bg-sky-50"         },
+  amber:  { bg: "bg-amber-50/60",  border: "border-amber-200",  bar: "bg-amber-400",  btn: "text-amber-600 border-amber-200 hover:bg-amber-50"   },
+  violet: { bg: "bg-violet-50/60", border: "border-violet-200", bar: "bg-violet-400", btn: "text-violet-600 border-violet-200 hover:bg-violet-50" },
 };
 
 const COMMON_KEYS = ["Enter", "Tab", "Escape", "Space", "ArrowDown", "ArrowUp", "ArrowLeft", "ArrowRight", "Backspace"];
@@ -67,7 +80,7 @@ const COMMON_KEYS = ["Enter", "Tab", "Escape", "Space", "ArrowDown", "ArrowUp", 
 // ─── Zod schemas ─────────────────────────────────────────────────────────────
 
 const stepSchema = z.object({
-  type: z.enum(["click", "listen", "type", "key", "select", "scroll", "hover", "navigate", "capture"]),
+  type: z.enum(["click", "listen", "type", "key", "select", "scroll", "hover", "navigate", "capture", "goback", "goforward", "reload", "wait", "screenshot", "rightclick", "doubleclick"]),
   selector: z.string().optional(),
   waitMs: z.number().optional(),
   waitForPopupClose: z.boolean().optional(),
@@ -102,9 +115,29 @@ type FormValues = z.infer<typeof formSchema>;
 
 // ─── Saved sequences ──────────────────────────────────────────────────────────
 
-interface SavedSequence { name: string; steps: Step[]; savedAt: string; }
-const STORAGE_KEY = "scraper-sequences-v2";
-const loadSequences = (): SavedSequence[] => { try { return JSON.parse(localStorage.getItem(STORAGE_KEY) || "[]"); } catch { return []; } };
+interface SavedSequence {
+  name: string;
+  steps: Step[];
+  savedAt: string;
+  url?: string;
+  loopEnabled?: boolean;
+  loopCount?: number;
+  loopDelayMs?: number;
+}
+const STORAGE_KEY = "scraper-sequences-v3";
+const loadSequences = (): SavedSequence[] => {
+  try {
+    // Migrate from v2
+    const v2 = localStorage.getItem("scraper-sequences-v2");
+    const v3 = localStorage.getItem(STORAGE_KEY);
+    if (!v3 && v2) {
+      const migrated = JSON.parse(v2) as SavedSequence[];
+      localStorage.setItem(STORAGE_KEY, JSON.stringify(migrated));
+      return migrated;
+    }
+    return JSON.parse(v3 || "[]");
+  } catch { return []; }
+};
 const persistSequences = (s: SavedSequence[]) => localStorage.setItem(STORAGE_KEY, JSON.stringify(s));
 
 // ─── Snapshot ────────────────────────────────────────────────────────────────
@@ -115,15 +148,22 @@ const sleep = (ms: number) => new Promise<void>((r) => setTimeout(r, ms));
 // ─── Default step factories ───────────────────────────────────────────────────
 
 const defaults: Record<StepType, Partial<Step>> = {
-  click:    { type: "click",    selector: "", waitMs: 1000, waitForPopupClose: false, popupTimeoutMs: 30000 },
-  listen:   { type: "listen",   selector: "", listenFor: "appear", listenTimeout: 15000 },
-  capture:  { type: "capture",  selector: "", varName: "" },
-  navigate: { type: "navigate", url: "", waitMs: 1500, incognito: true },
-  type:     { type: "type",     selector: "", text: "" },
-  key:      { type: "key",      key: "Enter", waitMs: 500 },
-  select:   { type: "select",   selector: "", value: "" },
-  scroll:   { type: "scroll",   selector: "" },
-  hover:    { type: "hover",    selector: "", waitMs: 500 },
+  click:       { type: "click",       selector: "", waitMs: 1000, waitForPopupClose: false, popupTimeoutMs: 30000 },
+  doubleclick: { type: "doubleclick", selector: "", waitMs: 500 },
+  rightclick:  { type: "rightclick",  selector: "", waitMs: 500 },
+  listen:      { type: "listen",      selector: "", listenFor: "appear", listenTimeout: 15000 },
+  capture:     { type: "capture",     selector: "", varName: "" },
+  navigate:    { type: "navigate",    url: "", waitMs: 1500, incognito: true },
+  goback:      { type: "goback",      waitMs: 1500 },
+  goforward:   { type: "goforward",   waitMs: 1500 },
+  reload:      { type: "reload",      waitMs: 1500 },
+  wait:        { type: "wait",        waitMs: 2000 },
+  screenshot:  { type: "screenshot",  waitMs: 800 },
+  type:        { type: "type",        selector: "", text: "" },
+  key:         { type: "key",         key: "Enter", waitMs: 500 },
+  select:      { type: "select",      selector: "", value: "" },
+  scroll:      { type: "scroll",      selector: "" },
+  hover:       { type: "hover",       selector: "", waitMs: 500 },
 };
 
 // ─── Main component ───────────────────────────────────────────────────────────
@@ -191,12 +231,28 @@ export default function Home() {
   };
   const confirmSave = () => {
     const name = saveName.trim(); if (!name) return;
-    const seq: SavedSequence = { name, steps: form.getValues("steps") as Step[], savedAt: new Date().toLocaleString("zh-CN") };
+    const v = form.getValues();
+    const seq: SavedSequence = {
+      name,
+      steps: v.steps as Step[],
+      url: v.url,
+      loopEnabled: v.loopEnabled,
+      loopCount: v.loopCount,
+      loopDelayMs: v.loopDelayMs,
+      savedAt: new Date().toLocaleString("zh-CN"),
+    };
     const updated = [seq, ...savedSequences.filter((s) => s.name !== name)];
     setSavedSequences(updated); persistSequences(updated); setSaveDialogOpen(false);
-    toast({ title: `已保存"${name}"` });
+    toast({ title: `已保存"${name}"`, description: "网址、步骤和循环设置均已保存" });
   };
-  const loadSequence = (seq: SavedSequence) => { form.setValue("steps", seq.steps as FormValues["steps"]); toast({ title: `已加载"${seq.name}"` }); };
+  const loadSequence = (seq: SavedSequence) => {
+    form.setValue("steps", seq.steps as FormValues["steps"]);
+    if (seq.url) form.setValue("url", seq.url);
+    if (seq.loopEnabled !== undefined) form.setValue("loopEnabled", seq.loopEnabled);
+    if (seq.loopCount !== undefined) form.setValue("loopCount", seq.loopCount);
+    if (seq.loopDelayMs !== undefined) form.setValue("loopDelayMs", seq.loopDelayMs);
+    toast({ title: `已加载"${seq.name}"`, description: seq.url ? `网址：${seq.url}` : undefined });
+  };
   const deleteSequence = (name: string) => { const u = savedSequences.filter((s) => s.name !== name); setSavedSequences(u); persistSequences(u); };
 
   // ── Export / Import ────────────────────────────────────────────────────────
@@ -556,7 +612,7 @@ export default function Home() {
                     <Play className="h-4 w-4 text-primary" />操作步骤
                     {stepFields.length > 0 && <Badge variant="secondary" className="font-mono">{stepFields.length}</Badge>}
                   </CardTitle>
-                  <CardDescription className="text-xs">按顺序执行，支持点击、监听、输入、按键、下拉、滚动、悬停</CardDescription>
+                  <CardDescription className="text-xs">按顺序执行，共 16 种操作：点击、双击、右键、输入、按键、下拉、滚动、悬停、跳转、后退、前进、刷新、等待、监听、读取、截图</CardDescription>
                 </CardHeader>
                 <CardContent className="space-y-2">
                   {stepFields.length === 0 && (
@@ -749,6 +805,78 @@ export default function Home() {
                                 {...form.register(`steps.${index}.selector`)} />
                             </Field>
                             <Field label="悬停后等待（毫秒）">
+                              <Input type="number" className="font-mono text-xs h-7"
+                                {...form.register(`steps.${index}.waitMs`, { valueAsNumber: true })} />
+                            </Field>
+                          </>}
+
+                          {s?.type === "doubleclick" && <>
+                            <Field label="目标元素选择器">
+                              <Input placeholder="例：.row-item 或 #edit-btn" className="font-mono text-xs h-7"
+                                {...form.register(`steps.${index}.selector`)} />
+                            </Field>
+                            <Field label="双击后等待（毫秒）">
+                              <Input type="number" className="font-mono text-xs h-7"
+                                {...form.register(`steps.${index}.waitMs`, { valueAsNumber: true })} />
+                            </Field>
+                          </>}
+
+                          {s?.type === "rightclick" && <>
+                            <Field label="目标元素选择器">
+                              <Input placeholder="例：.item 或 #context-target" className="font-mono text-xs h-7"
+                                {...form.register(`steps.${index}.selector`)} />
+                            </Field>
+                            <Field label="右键后等待（毫秒）">
+                              <Input type="number" className="font-mono text-xs h-7"
+                                {...form.register(`steps.${index}.waitMs`, { valueAsNumber: true })} />
+                            </Field>
+                          </>}
+
+                          {s?.type === "goback" && <>
+                            <p className="text-xs text-muted-foreground bg-slate-50 border border-slate-200 rounded px-2 py-1.5">
+                              点击执行后，浏览器后退一步（等同于点后退按钮）。可配合"跳转网址"步骤使用，在两个页面来回切换。
+                            </p>
+                            <Field label="后退后等待页面加载（毫秒）">
+                              <Input type="number" className="font-mono text-xs h-7"
+                                {...form.register(`steps.${index}.waitMs`, { valueAsNumber: true })} />
+                            </Field>
+                          </>}
+
+                          {s?.type === "goforward" && <>
+                            <p className="text-xs text-muted-foreground bg-slate-50 border border-slate-200 rounded px-2 py-1.5">
+                              浏览器前进一步（需要先有可前进的历史记录）。
+                            </p>
+                            <Field label="前进后等待页面加载（毫秒）">
+                              <Input type="number" className="font-mono text-xs h-7"
+                                {...form.register(`steps.${index}.waitMs`, { valueAsNumber: true })} />
+                            </Field>
+                          </>}
+
+                          {s?.type === "reload" && <>
+                            <p className="text-xs text-muted-foreground bg-sky-50 border border-sky-200 rounded px-2 py-1.5">
+                              刷新当前页面，等待重新加载完成后继续后续步骤。
+                            </p>
+                            <Field label="刷新后等待页面加载（毫秒）">
+                              <Input type="number" className="font-mono text-xs h-7"
+                                {...form.register(`steps.${index}.waitMs`, { valueAsNumber: true })} />
+                            </Field>
+                          </>}
+
+                          {s?.type === "wait" && <>
+                            <Field label="等待时长（毫秒）">
+                              <Input type="number" className="font-mono text-xs h-7"
+                                {...form.register(`steps.${index}.waitMs`, { valueAsNumber: true })} />
+                            </Field>
+                            <p className="text-xs text-muted-foreground bg-amber-50 border border-amber-200 rounded px-2 py-1.5">
+                              纯时间等待，适合等待动画播放、延迟渲染等场景。
+                            </p>
+                          </>}
+
+                          {s?.type === "screenshot" && <>
+                            <p className="text-xs text-muted-foreground bg-violet-50 border border-violet-200 rounded px-2 py-1.5">
+                              在此处暂停并截图，截图会在右侧实时监控画面中显示。适合用于关键节点确认。
+                            </p>
+                            <Field label="截图前等待（毫秒）">
                               <Input type="number" className="font-mono text-xs h-7"
                                 {...form.register(`steps.${index}.waitMs`, { valueAsNumber: true })} />
                             </Field>
@@ -1172,7 +1300,7 @@ export default function Home() {
               <h3 className="text-lg font-medium text-foreground mb-2">搭好步骤，一键执行</h3>
               <p className="text-sm max-w-sm mb-6">点击"添加步骤"，选择要执行的操作类型，排好顺序，保存为方案，支持循环自动运行。</p>
               <div className="flex items-center gap-4 text-xs font-mono opacity-50">
-                <div className="flex items-center gap-1"><CheckCircle2 className="h-3 w-3" />9 种操作类型</div>
+                <div className="flex items-center gap-1"><CheckCircle2 className="h-3 w-3" />16 种操作类型</div>
                 <div className="flex items-center gap-1"><CheckCircle2 className="h-3 w-3" />保存复用</div>
                 <div className="flex items-center gap-1"><CheckCircle2 className="h-3 w-3" />支持循环</div>
               </div>

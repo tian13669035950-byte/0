@@ -13,7 +13,7 @@ const CustomSelectorSchema = z.object({
 });
 
 const ScrapeStepSchema = z.object({
-  type: z.enum(["click", "listen", "type", "key", "select", "scroll", "hover", "navigate", "capture"]),
+  type: z.enum(["click", "listen", "type", "key", "select", "scroll", "hover", "navigate", "capture", "goback", "goforward", "reload", "wait", "screenshot", "rightclick", "doubleclick"]),
   selector: z.string().optional(),
   waitMs: z.number().optional(),
   waitForPopupClose: z.boolean().optional(),
@@ -264,6 +264,48 @@ async function runScrapeSession(
         try {
           await page.waitForSelector(selector, { timeout: 8000 });
           await page.hover(selector);
+          if (step.waitMs) await page.waitForTimeout(step.waitMs);
+        } catch { ok = false; }
+
+      } else if (step.type === "goback") {
+        try {
+          await page.goBack({ timeout: 10000, waitUntil: "domcontentloaded" });
+          await page.waitForTimeout(step.waitMs ?? 1500);
+        } catch { ok = false; }
+
+      } else if (step.type === "goforward") {
+        try {
+          await page.goForward({ timeout: 10000, waitUntil: "domcontentloaded" });
+          await page.waitForTimeout(step.waitMs ?? 1500);
+        } catch { ok = false; }
+
+      } else if (step.type === "reload") {
+        try {
+          await page.reload({ timeout: 15000, waitUntil: "domcontentloaded" });
+          await page.waitForTimeout(step.waitMs ?? 1500);
+        } catch { ok = false; }
+
+      } else if (step.type === "wait") {
+        await page.waitForTimeout(step.waitMs ?? 1000);
+
+      } else if (step.type === "screenshot") {
+        // Live watch already streams screenshots; this step just pauses for a moment
+        // so the screenshot appears clearly in the watch view
+        await page.waitForTimeout(step.waitMs ?? 800);
+
+      } else if (step.type === "rightclick" && step.selector?.trim()) {
+        const selector = step.selector.trim();
+        try {
+          await page.waitForSelector(selector, { timeout: 8000 });
+          await page.click(selector, { button: "right" });
+          if (step.waitMs) await page.waitForTimeout(step.waitMs);
+        } catch { ok = false; }
+
+      } else if (step.type === "doubleclick" && step.selector?.trim()) {
+        const selector = step.selector.trim();
+        try {
+          await page.waitForSelector(selector, { timeout: 8000 });
+          await page.dblclick(selector);
           if (step.waitMs) await page.waitForTimeout(step.waitMs);
         } catch { ok = false; }
       }
