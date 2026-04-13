@@ -581,9 +581,14 @@ router.post("/scrape/stream", async (req, res) => {
   res.setHeader("Cache-Control", "no-cache");
   res.setHeader("X-Accel-Buffering", "no");
 
-  // Abort the scrape session as soon as the client disconnects (stop button / browser close)
+  // Abort only when the client disconnects *before* the response finishes normally.
+  // Using req.on("close") fires too early (right after the request body is parsed).
+  // "finish" fires when res.end() completes; "close" fires when the socket is destroyed.
+  // If "close" arrives before "finish", the client disconnected prematurely → abort.
   const ac = new AbortController();
-  req.on("close", () => ac.abort());
+  let resDone = false;
+  res.on("finish", () => { resDone = true; });
+  res.on("close", () => { if (!resDone) ac.abort(); });
 
   let lastWriteAt = Date.now();
   const write = (event: StreamEvent) => {
@@ -644,9 +649,11 @@ router.post("/parallel/stream", async (req, res) => {
   res.setHeader("X-Accel-Buffering", "no");
   res.flushHeaders();
 
-  // Abort all track sessions when the client disconnects (stop button / browser close)
+  // Abort all track sessions when the client disconnects prematurely.
   const ac = new AbortController();
-  req.on("close", () => ac.abort());
+  let resDone = false;
+  res.on("finish", () => { resDone = true; });
+  res.on("close", () => { if (!resDone) ac.abort(); });
 
   const write = (obj: object) => {
     try { res.write(JSON.stringify(obj) + "\n"); } catch { /* client disconnected */ }
