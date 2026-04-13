@@ -348,6 +348,18 @@ export default function Home() {
     setTypeText("");
   }, [sendInteract, typeText]);
 
+  const copyPageText = useCallback(async () => {
+    if (!sessionId) return;
+    try {
+      const resp = await fetch(`/api/record/session/${sessionId}/text`);
+      const { text } = await resp.json() as { text: string };
+      await navigator.clipboard.writeText(text);
+      toast({ title: "已复制页面文字", description: `共 ${text.length} 个字符` });
+    } catch {
+      toast({ title: "提取失败", variant: "destructive" });
+    }
+  }, [sessionId, toast]);
+
   const applyRecordedSteps = useCallback(() => {
     recordedSteps.forEach((rs) => {
       if (rs.type === "click") {
@@ -1088,74 +1100,79 @@ export default function Home() {
         {/* Main content: remote browser + step log */}
         <div className="flex flex-col md:flex-row flex-1 overflow-hidden">
           {/* Remote browser canvas */}
-          <div className="flex-1 relative bg-black min-h-0 flex flex-col" style={{ minHeight: 0 }}>
-            {/* Screenshot area with click/scroll overlay */}
-            <div className="relative flex-1 min-h-0" style={{ aspectRatio: "16/9", maxHeight: "calc(100% - 88px)" }}>
+          <div className="flex-1 bg-zinc-950 min-h-0 flex flex-col overflow-hidden">
+            {/* Screenshot — natural 16:9, never stretched */}
+            <div className="relative flex-1 min-h-0 flex items-center justify-center overflow-hidden">
               {sessionLoading || !screenshotUrl ? (
-                <div className="absolute inset-0 flex flex-col items-center justify-center gap-3 bg-zinc-900">
-                  <Loader2 className="h-8 w-8 animate-spin text-white/50" />
-                  <span className="text-sm text-white/50">正在启动浏览器…</span>
+                <div className="flex flex-col items-center justify-center gap-3 w-full h-full">
+                  <Loader2 className="h-8 w-8 animate-spin text-white/40" />
+                  <span className="text-sm text-white/40">正在启动浏览器…</span>
                 </div>
               ) : (
-                <img
-                  src={screenshotUrl}
-                  alt="远程浏览器"
-                  className="absolute inset-0 w-full h-full"
-                  style={{ objectFit: "fill", imageRendering: "auto" }}
-                  draggable={false}
-                />
+                /* Container keeps 16:9, scales to fit available area */
+                <div className="relative w-full" style={{ aspectRatio: "16/9", maxHeight: "100%", maxWidth: "calc((100vh - 160px) * 16 / 9)" }}>
+                  <img
+                    src={screenshotUrl}
+                    alt="远程浏览器"
+                    className="w-full h-full block"
+                    style={{ imageRendering: "auto" }}
+                    draggable={false}
+                  />
+                  {/* Invisible overlay — captures clicks and scrolls */}
+                  <div
+                    ref={overlayRef}
+                    className="absolute inset-0 cursor-crosshair"
+                    onClick={handleOverlayClick}
+                    onWheel={handleOverlayScroll}
+                  />
+                </div>
               )}
-              {/* Invisible overlay — captures clicks and scrolls */}
-              <div
-                ref={overlayRef}
-                className="absolute inset-0 cursor-crosshair"
-                onClick={handleOverlayClick}
-                onWheel={handleOverlayScroll}
-              />
             </div>
 
-            {/* Keyboard / type bar */}
-            <div className="shrink-0 bg-zinc-900 border-t border-zinc-700 px-2 py-1.5 space-y-1.5">
-              {/* Common keys */}
-              <div className="flex flex-wrap gap-1">
+            {/* Action bar */}
+            <div className="shrink-0 bg-zinc-900 border-t border-zinc-700 px-3 py-2 space-y-2">
+              {/* Row 1 — page controls */}
+              <div className="flex items-center gap-2 flex-wrap">
                 {[
-                  { label: "⏎ Enter",  key: "Enter" },
-                  { label: "⇥ Tab",    key: "Tab" },
-                  { label: "Esc",      key: "Escape" },
-                  { label: "⌫",        key: "Backspace" },
-                  { label: "↑",        key: "ArrowUp" },
-                  { label: "↓",        key: "ArrowDown" },
-                  { label: "←",        key: "ArrowLeft" },
-                  { label: "→",        key: "ArrowRight" },
-                  { label: "PgDn",     key: "PageDown" },
-                  { label: "PgUp",     key: "PageUp" },
-                ].map(({ label, key }) => (
+                  { label: "↑ 向上", action: () => sendInteract({ action: "scroll", x: 0.5, y: 0.5, deltaY: -400 }) },
+                  { label: "↓ 向下", action: () => sendInteract({ action: "scroll", x: 0.5, y: 0.5, deltaY: 400 }) },
+                  { label: "⏎ 确认", action: () => sendKey("Enter") },
+                  { label: "Esc",    action: () => sendKey("Escape") },
+                  { label: "⌫ 退格", action: () => sendKey("Backspace") },
+                  { label: "⇥ Tab", action: () => sendKey("Tab") },
+                ].map(({ label, action }) => (
                   <button
-                    key={key}
+                    key={label}
                     type="button"
-                    onClick={() => sendKey(key)}
-                    className="px-2 py-0.5 rounded text-[11px] font-mono bg-zinc-700 text-zinc-200 hover:bg-zinc-600 active:bg-zinc-500 border border-zinc-600 transition-colors"
+                    onClick={action}
+                    className="px-3 py-1.5 rounded-md text-xs font-medium bg-zinc-700 text-zinc-100 hover:bg-zinc-600 active:bg-zinc-500 border border-zinc-600 transition-colors whitespace-nowrap"
                   >
                     {label}
                   </button>
                 ))}
+                {/* Copy text button — pulls visible text from real DOM */}
+                <button
+                  type="button"
+                  onClick={copyPageText}
+                  className="ml-auto px-3 py-1.5 rounded-md text-xs font-medium bg-zinc-800 text-zinc-300 hover:bg-zinc-700 border border-zinc-600 transition-colors whitespace-nowrap"
+                >
+                  📋 复制页面文字
+                </button>
               </div>
-              {/* Type input */}
-              <div className="flex gap-1.5">
+              {/* Row 2 — type text into focused field */}
+              <div className="flex gap-2">
                 <input
                   type="text"
                   value={typeText}
                   onChange={e => setTypeText(e.target.value)}
-                  onKeyDown={e => {
-                    if (e.key === "Enter") { e.preventDefault(); sendType(); }
-                  }}
-                  placeholder="输入文字 → 回车发送"
-                  className="flex-1 min-w-0 px-2 py-1 text-xs rounded bg-zinc-800 text-zinc-100 border border-zinc-600 placeholder:text-zinc-500 focus:outline-none focus:border-zinc-400"
+                  onKeyDown={e => { if (e.key === "Enter") { e.preventDefault(); sendType(); } }}
+                  placeholder="在输入框输入文字，回车发送到浏览器…"
+                  className="flex-1 min-w-0 px-3 py-1.5 text-sm rounded-md bg-zinc-800 text-zinc-100 border border-zinc-600 placeholder:text-zinc-500 focus:outline-none focus:border-blue-500"
                 />
                 <button
                   type="button"
                   onClick={sendType}
-                  className="px-3 py-1 text-xs rounded bg-zinc-600 text-zinc-100 hover:bg-zinc-500 border border-zinc-500 whitespace-nowrap"
+                  className="px-4 py-1.5 text-sm rounded-md bg-blue-600 text-white hover:bg-blue-500 border border-blue-500 whitespace-nowrap transition-colors"
                 >
                   发送
                 </button>

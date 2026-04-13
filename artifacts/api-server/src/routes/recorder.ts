@@ -237,6 +237,20 @@ router.post("/record/session/:id/interact", async (req, res) => {
   }
 });
 
+// ─── GET /api/record/session/:id/text  (copy visible text) ──────────────────
+router.get("/record/session/:id/text", async (req, res) => {
+  const session = sessions.get(req.params.id);
+  if (!session) return res.status(404).json({ error: "Session not found" });
+  try {
+    const text = await session.page.evaluate(() =>
+      (document.body.innerText || "").replace(/\s{3,}/g, "\n\n").trim()
+    );
+    res.json({ text });
+  } catch (e: unknown) {
+    res.status(500).json({ error: e instanceof Error ? e.message : String(e) });
+  }
+});
+
 // ─── DELETE /api/record/session/:id ──────────────────────────────────────────
 router.delete("/record/session/:id", async (req, res) => {
   const session = sessions.get(req.params.id);
