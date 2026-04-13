@@ -197,6 +197,8 @@ export default function Parallel() {
   }, [executeOnce, tracks.length, toast]);
 
   // ── Loop run ─────────────────────────────────────────────────────────────────
+  // Fixed-interval mode: each cycle is exactly loopDelayMs from start to start.
+  // If execution takes longer than the interval, the next cycle begins immediately.
   const runLoop = useCallback(async () => {
     stopLoopRef.current = false;
     setLoopRunning(true);
@@ -204,9 +206,13 @@ export default function Parallel() {
     for (let i = 0; i < loopCount; i++) {
       if (stopLoopRef.current) break;
       setLoopProgress({ cur: i + 1, tot: loopCount, ok, fail });
+      const cycleStart = Date.now();
       const succeeded = await executeOnce();
       if (succeeded) ok++; else fail++;
-      if (i < loopCount - 1 && !stopLoopRef.current) await sleep(loopDelayMs);
+      if (i < loopCount - 1 && !stopLoopRef.current) {
+        const remaining = loopDelayMs - (Date.now() - cycleStart);
+        if (remaining > 0) await sleep(remaining);
+      }
     }
     setLoopRunning(false);
     setLoopProgress(null);
@@ -499,7 +505,7 @@ export default function Parallel() {
                       <Input type="number" min={1} max={999} value={loopCount} onChange={e => setLoopCount(Math.max(1, Number(e.target.value)))} className="w-20 h-7 text-xs text-center" />
                     </div>
                     <div className="flex items-center gap-1.5">
-                      <span className="text-xs text-muted-foreground whitespace-nowrap">间隔(ms)</span>
+                      <span className="text-xs text-muted-foreground whitespace-nowrap">固定间隔(ms)</span>
                       <Input type="number" min={0} step={500} value={loopDelayMs} onChange={e => setLoopDelayMs(Math.max(0, Number(e.target.value)))} className="w-24 h-7 text-xs text-center" />
                     </div>
                   </>
