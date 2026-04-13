@@ -152,6 +152,11 @@ export interface ScrapeResult {
   capturedVars?: ScrapeResultCapturedVars;
 }
 
+/**
+ * Variables captured by "capture" steps
+ */
+export type ScrapeHistoryItemCapturedVars = { [key: string]: string };
+
 export interface ScrapeHistoryItem {
   id: string;
   url: string;
@@ -159,6 +164,9 @@ export interface ScrapeHistoryItem {
   scrapedAt: string;
   duration: number;
   itemCount: number;
+  /** Variables captured by "capture" steps */
+  capturedVars?: ScrapeHistoryItemCapturedVars;
+  customResults?: CustomResult[];
 }
 
 export interface ErrorResponse {

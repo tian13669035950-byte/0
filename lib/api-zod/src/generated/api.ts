@@ -195,5 +195,18 @@ export const GetScrapeHistoryResponseItem = zod.object({
   scrapedAt: zod.string(),
   duration: zod.number(),
   itemCount: zod.number(),
+  capturedVars: zod
+    .record(zod.string(), zod.string())
+    .optional()
+    .describe('Variables captured by \"capture\" steps'),
+  customResults: zod
+    .array(
+      zod.object({
+        name: zod.string(),
+        selector: zod.string(),
+        values: zod.array(zod.string()),
+      }),
+    )
+    .optional(),
 });
 export const GetScrapeHistoryResponse = zod.array(GetScrapeHistoryResponseItem);

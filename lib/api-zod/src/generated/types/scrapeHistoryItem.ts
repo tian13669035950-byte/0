@@ -5,6 +5,8 @@
  * API specification
  * OpenAPI spec version: 0.1.0
  */
+import type { CustomResult } from "./customResult";
+import type { ScrapeHistoryItemCapturedVars } from "./scrapeHistoryItemCapturedVars";
 
 export interface ScrapeHistoryItem {
   id: string;
@@ -13,4 +15,7 @@ export interface ScrapeHistoryItem {
   scrapedAt: string;
   duration: number;
   itemCount: number;
+  /** Variables captured by "capture" steps */
+  capturedVars?: ScrapeHistoryItemCapturedVars;
+  customResults?: CustomResult[];
 }

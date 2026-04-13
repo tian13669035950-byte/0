@@ -400,7 +400,7 @@ router.post("/scrape", async (req, res) => {
       headings.length + links.length + paragraphs.length + images.length + metaTags.length +
       customResults.reduce((sum, r) => sum + r.values.length, 0);
 
-    history.unshift({ id, url, title, scrapedAt, duration, itemCount });
+    history.unshift({ id, url, title, scrapedAt, duration, itemCount, capturedVars: vars, customResults });
     if (history.length > 50) history.pop();
 
     res.json({

@@ -310,6 +310,15 @@ components:
           type: number
         itemCount:
           type: number
+        capturedVars:
+          type: object
+          additionalProperties:
+            type: string
+          description: Variables captured by "capture" steps
+        customResults:
+          type: array
+          items:
+            $ref: "#/components/schemas/CustomResult"
       required:
         - id
         - url

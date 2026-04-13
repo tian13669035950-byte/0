@@ -15,6 +15,7 @@ export * from "./image";
 export * from "./link";
 export * from "./metaTag";
 export * from "./scrapeHistoryItem";
+export * from "./scrapeHistoryItemCapturedVars";
 export * from "./scrapeOptions";
 export * from "./scrapeRequest";
 export * from "./scrapeResult";
