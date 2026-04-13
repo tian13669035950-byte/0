@@ -1,17 +1,10 @@
 import { Router } from "express";
-import { chromium } from "playwright-core";
 import { randomUUID } from "crypto";
+import { launchStealthBrowser, newStealthContext } from "../lib/stealth-browser";
 
 const router = Router();
 
-const CHROMIUM_PATH =
-  process.env.CHROMIUM_PATH ||
-  "/nix/store/qa9cnw4v5xkxyip6mb9kxqfq1z4x2dx1-chromium-138.0.7204.100/bin/chromium";
-
-const VIEWPORT = { width: 1280, height: 720 };
-
-const UA =
-  "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/120.0.0.0 Safari/537.36";
+const VIEWPORT = { width: 1280, height: 800 };
 
 // ─── Types ────────────────────────────────────────────────────────────────────
 
@@ -63,12 +56,8 @@ router.post("/record/session/start", async (req, res) => {
   if (!/^https?:\/\//i.test(url)) url = "https://" + url;
 
   try {
-    const browser = await chromium.launch({
-      headless: true,
-      executablePath: CHROMIUM_PATH,
-      args: ["--no-sandbox", "--disable-setuid-sandbox", "--disable-dev-shm-usage"],
-    });
-    const ctx = await browser.newContext({ viewport: VIEWPORT, userAgent: UA });
+    const browser = await launchStealthBrowser();
+    const ctx = await newStealthContext(browser, { viewport: VIEWPORT });
     const page = await ctx.newPage();
 
     try {

@@ -1,7 +1,7 @@
 import { Router } from "express";
-import { chromium } from "playwright-core";
 import { randomUUID } from "crypto";
 import { z } from "zod";
+import { launchStealthBrowser, newStealthContext } from "../lib/stealth-browser";
 
 const router = Router();
 
@@ -78,13 +78,6 @@ interface ScrapeHistoryItem {
 
 const history: ScrapeHistoryItem[] = [];
 
-const CHROMIUM_PATH =
-  process.env.CHROMIUM_PATH ||
-  "/nix/store/qa9cnw4v5xkxyip6mb9kxqfq1z4x2dx1-chromium-138.0.7204.100/bin/chromium";
-
-const UA =
-  "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/120.0.0.0 Safari/537.36";
-
 // ─── Core session runner ──────────────────────────────────────────────────────
 // `emit` is called with streaming events as execution progresses.
 // For non-streaming callers, pass `() => {}`.
@@ -96,14 +89,10 @@ async function runScrapeSession(
   watchId?: string
 ) {
   const startTime = Date.now();
-  const browser = await chromium.launch({
-    headless: true,
-    executablePath: CHROMIUM_PATH,
-    args: ["--no-sandbox", "--disable-setuid-sandbox", "--disable-dev-shm-usage"],
-  });
+  const browser = await launchStealthBrowser();
 
   try {
-    const newCtx = () => browser.newContext({ userAgent: UA });
+    const newCtx = () => newStealthContext(browser);
     let ctx = await newCtx();
     let page = await ctx.newPage();
 
