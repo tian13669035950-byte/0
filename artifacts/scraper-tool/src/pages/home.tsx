@@ -1504,16 +1504,28 @@ export default function Home() {
                       } : undefined}
                     />
                     {/* Overlay hint */}
-                    <div className="absolute bottom-2 left-2 right-2 flex justify-center pointer-events-none">
+                    <div className="absolute inset-0 flex flex-col items-center justify-center pointer-events-none">
                       {isClickPickMode ? (
-                        <span className="text-[10px] bg-blue-600/90 text-white rounded px-2 py-0.5 flex items-center gap-1">
-                          <span className="inline-block w-1.5 h-1.5 rounded-full bg-white animate-pulse" />
-                          {recStepPending ? "执行中…" : `点击页面上的元素来执行「${recStepDef?.label}」`}
-                        </span>
+                        <div className="absolute bottom-3 left-2 right-2 flex justify-center">
+                          <span className="text-xs bg-blue-600/95 text-white rounded-lg px-3 py-1.5 flex items-center gap-2 shadow-lg">
+                            <span className="inline-block w-2 h-2 rounded-full bg-white animate-pulse" />
+                            {recStepPending ? "执行中，请稍候…" : `点击上方页面中的目标元素，自动执行「${recStepDef?.label}」并记录`}
+                          </span>
+                        </div>
+                      ) : recFormType === null ? (
+                        /* No step selected — big centered nudge */
+                        <div className="flex flex-col items-center gap-2 bg-black/55 rounded-xl px-5 py-4 text-center">
+                          <span className="text-sm text-white font-semibold">① 先从下方选择操作类型</span>
+                          <span className="text-xs text-white/70">点击「点击」「输入」等按钮后，再与页面交互</span>
+                          <svg className="h-5 w-5 text-white/60 mt-1 animate-bounce" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2"><path d="M12 5v14M5 12l7 7 7-7"/></svg>
+                        </div>
                       ) : (
-                        <span className="text-[10px] bg-black/60 text-white/70 rounded px-2 py-0.5">
-                          实时预览 — 点击下方按钮操作网页
-                        </span>
+                        /* Form-based step selected */
+                        <div className="absolute bottom-3 left-2 right-2 flex justify-center">
+                          <span className="text-xs bg-black/70 text-white/80 rounded-lg px-3 py-1.5 shadow">
+                            填写下方表单后点「执行并记录」
+                          </span>
+                        </div>
                       )}
                     </div>
                   </div>
