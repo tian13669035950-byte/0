@@ -15,11 +15,19 @@ const UA =
 
 // ─── Types ────────────────────────────────────────────────────────────────────
 
-interface RecordedStep {
-  type: "click" | "type" | "select";
-  selector: string;
+export interface RecordedStep {
+  type: string;
+  selector?: string;
+  url?: string;
   text?: string;
+  key?: string;
   value?: string;
+  waitMs?: number;
+  tabIndex?: number;
+  listenFor?: string;
+  listenTimeout?: number;
+  varName?: string;
+  incognito?: boolean;
   label?: string;
   navigatedTo?: string;
 }
@@ -27,6 +35,7 @@ interface RecordedStep {
 interface RecorderSession {
   browser: import("playwright-core").Browser;
   page: import("playwright-core").Page;
+  tabs: import("playwright-core").Page[];
   lastActivity: number;
   steps: RecordedStep[];
   currentUrl: string;
@@ -36,7 +45,6 @@ interface RecorderSession {
 
 const sessions = new Map<string, RecorderSession>();
 
-// Auto-cleanup inactive sessions (>5 min idle)
 setInterval(() => {
   const cutoff = Date.now() - 5 * 60_000;
   for (const [id, s] of sessions) {
@@ -46,41 +54,6 @@ setInterval(() => {
     }
   }
 }, 60_000);
-
-// ─── CSS selector generator (runs inside page context) ───────────────────────
-
-const GET_SELECTOR = `(el) => {
-  if (!el || el.nodeType !== 1) return '';
-  if (el === document.body) return 'body';
-  const parts = [];
-  let cur = el;
-  for (let d = 0; d < 8; d++) {
-    if (!cur || cur === document.documentElement) break;
-    if (cur.id && /^[a-zA-Z][\\w:-]*$/.test(cur.id)) {
-      parts.unshift('#' + CSS.escape(cur.id));
-      break;
-    }
-    let tag = cur.tagName.toLowerCase();
-    const parent = cur.parentElement;
-    if (parent) {
-      const sibs = Array.from(parent.children).filter(c => c.tagName === cur.tagName);
-      if (sibs.length > 1) tag += ':nth-of-type(' + (sibs.indexOf(cur) + 1) + ')';
-    }
-    parts.unshift(tag);
-    cur = cur.parentElement;
-  }
-  return parts.join(' > ');
-}`;
-
-const GET_LABEL = `(el) => {
-  return (
-    el.getAttribute('aria-label') ||
-    el.getAttribute('title') ||
-    el.getAttribute('placeholder') ||
-    el.getAttribute('name') ||
-    el.textContent?.trim().slice(0, 60) || ''
-  ).replace(/\\s+/g, ' ').trim();
-}`;
 
 // ─── POST /api/record/session/start ──────────────────────────────────────────
 router.post("/record/session/start", async (req, res) => {
@@ -107,6 +80,7 @@ router.post("/record/session/start", async (req, res) => {
     sessions.set(sessionId, {
       browser,
       page,
+      tabs: [page],
       lastActivity: Date.now(),
       steps: [],
       currentUrl: page.url(),
@@ -134,7 +108,6 @@ router.get("/record/session/:id/stream", async (req, res) => {
     try { res.write(`data: ${JSON.stringify(obj)}\n\n`); } catch { alive = false; }
   };
 
-  // Send first frame immediately
   try {
     const shot = await session.page.screenshot({ type: "jpeg", quality: 70 });
     send({ type: "screenshot", data: shot.toString("base64"), url: session.page.url() });
@@ -155,86 +128,176 @@ router.get("/record/session/:id/stream", async (req, res) => {
       alive = false;
       clearInterval(loop);
     }
-  }, 300); // ~3fps — safe even on a slow server
+  }, 300);
 
   req.on("close", () => { alive = false; clearInterval(loop); });
 });
 
-// ─── POST /api/record/session/:id/interact ────────────────────────────────────
-router.post("/record/session/:id/interact", async (req, res) => {
+// ─── POST /api/record/session/:id/step  (execute + record a step) ─────────────
+router.post("/record/session/:id/step", async (req, res) => {
   const session = sessions.get(req.params.id);
   if (!session) return res.status(404).json({ error: "Session not found" });
   session.lastActivity = Date.now();
 
-  const { action, x, y, text, key, deltaY } = req.body as {
-    action: "click" | "type" | "key" | "scroll";
-    x?: number; y?: number;   // normalized 0–1
-    text?: string;
-    key?: string;
-    deltaY?: number;
-  };
-
-  const page = session.page;
+  const step = req.body as RecordedStep;
+  let page = session.page;
+  let ok = true;
 
   try {
-    if (action === "click" && x !== undefined && y !== undefined) {
-      const px = Math.round(x * VIEWPORT.width);
-      const py = Math.round(y * VIEWPORT.height);
+    switch (step.type) {
+      case "click":
+        await page.waitForSelector(step.selector!, { timeout: 8000 });
+        await page.click(step.selector!);
+        await page.waitForTimeout(step.waitMs ?? 1000);
+        break;
 
-      // Get element info BEFORE clicking
-      const info = await page.evaluate(
-        ({ selectorFn, labelFn, px, py }) => {
-          const el = document.elementFromPoint(px, py) as Element | null;
-          if (!el) return null;
-          const getSelector = new Function("el", `return (${selectorFn})(el);`) as (el: Element) => string;
-          const getLabel = new Function("el", `return (${labelFn})(el);`) as (el: Element) => string;
-          return {
-            selector: getSelector(el),
-            label: getLabel(el),
-            tag: el.tagName.toLowerCase(),
-          };
-        },
-        { selectorFn: GET_SELECTOR, labelFn: GET_LABEL, px, py }
-      );
+      case "doubleclick":
+        await page.waitForSelector(step.selector!, { timeout: 8000 });
+        await page.dblclick(step.selector!);
+        await page.waitForTimeout(step.waitMs ?? 500);
+        break;
 
-      const prevUrl = page.url();
-      await page.mouse.click(px, py);
+      case "rightclick":
+        await page.waitForSelector(step.selector!, { timeout: 8000 });
+        await page.click(step.selector!, { button: "right" });
+        await page.waitForTimeout(step.waitMs ?? 500);
+        break;
 
-      // Wait briefly for potential navigation or JS response
-      await page.waitForTimeout(400);
-      const newUrl = page.url();
+      case "type":
+        await page.waitForSelector(step.selector!, { timeout: 8000 });
+        await page.fill(step.selector!, step.text ?? "");
+        await page.waitForTimeout(step.waitMs ?? 300);
+        break;
 
-      const step: RecordedStep = {
-        type: "click",
-        selector: info?.selector ?? "",
-        label: info?.label ?? "",
-        ...(newUrl !== prevUrl ? { navigatedTo: newUrl } : {}),
-      };
-      session.steps.push(step);
-      res.json({ step, url: newUrl });
+      case "key":
+        await page.keyboard.press(step.key ?? "Enter");
+        await page.waitForTimeout(step.waitMs ?? 300);
+        break;
 
-    } else if (action === "type" && text) {
-      await page.keyboard.type(text, { delay: 30 });
-      res.json({ ok: true });
+      case "select":
+        await page.waitForSelector(step.selector!, { timeout: 8000 });
+        await page.selectOption(step.selector!, step.value ?? "");
+        await page.waitForTimeout(step.waitMs ?? 300);
+        break;
 
-    } else if (action === "key" && key) {
-      await page.keyboard.press(key);
-      await page.waitForTimeout(200);
-      res.json({ ok: true, url: page.url() });
+      case "scroll":
+        if (step.selector?.trim()) {
+          const el = await page.$(step.selector);
+          if (el) await el.scrollIntoViewIfNeeded();
+          else await page.mouse.wheel(0, step.waitMs ?? 300);
+        } else {
+          await page.mouse.wheel(0, step.waitMs ?? 300);
+        }
+        break;
 
-    } else if (action === "scroll" && x !== undefined && y !== undefined) {
-      const px = Math.round(x * VIEWPORT.width);
-      const py = Math.round(y * VIEWPORT.height);
-      await page.mouse.move(px, py);
-      await page.mouse.wheel(0, deltaY ?? 300);
-      res.json({ ok: true });
+      case "hover":
+        await page.waitForSelector(step.selector!, { timeout: 8000 });
+        await page.hover(step.selector!);
+        await page.waitForTimeout(step.waitMs ?? 300);
+        break;
 
-    } else {
-      res.status(400).json({ error: "Invalid action or missing params" });
+      case "navigate":
+        await page.goto(step.url!, { waitUntil: "domcontentloaded", timeout: 20000 });
+        await page.waitForTimeout(step.waitMs ?? 1500);
+        break;
+
+      case "goback":
+        await page.goBack({ waitUntil: "domcontentloaded" });
+        await page.waitForTimeout(step.waitMs ?? 1500);
+        break;
+
+      case "goforward":
+        await page.goForward({ waitUntil: "domcontentloaded" });
+        await page.waitForTimeout(step.waitMs ?? 1500);
+        break;
+
+      case "reload":
+        await page.reload({ waitUntil: "domcontentloaded" });
+        await page.waitForTimeout(step.waitMs ?? 1500);
+        break;
+
+      case "wait":
+        await page.waitForTimeout(step.waitMs ?? 1000);
+        break;
+
+      case "screenshot":
+        await page.waitForTimeout(step.waitMs ?? 500);
+        break;
+
+      case "listen":
+        if (step.listenFor === "networkIdle") {
+          await page.waitForLoadState("networkidle", { timeout: step.listenTimeout ?? 15000 });
+        } else if (step.selector?.trim()) {
+          const state = step.listenFor === "disappear" ? "hidden" : "visible";
+          await page.waitForSelector(step.selector, { state, timeout: step.listenTimeout ?? 15000 });
+        }
+        break;
+
+      case "capture":
+        if (step.selector?.trim()) {
+          const el = await page.$(step.selector);
+          if (el) {
+            const captured = (await el.textContent()) ?? "";
+            step.label = captured.slice(0, 80);
+          }
+        }
+        break;
+
+      case "newtab": {
+        const ctx = page.context();
+        const newTab = await ctx.newPage();
+        session.tabs.push(newTab);
+        session.page = newTab;
+        page = newTab;
+        if (step.url?.trim()) {
+          await newTab.goto(step.url, { waitUntil: "domcontentloaded", timeout: 20000 });
+        }
+        await newTab.waitForTimeout(step.waitMs ?? 1500);
+        break;
+      }
+
+      case "switchtab": {
+        const idx = step.tabIndex ?? 0;
+        if (idx >= 0 && idx < session.tabs.length && !session.tabs[idx].isClosed()) {
+          session.page = session.tabs[idx];
+          page = session.page;
+          await page.bringToFront();
+          await page.waitForTimeout(step.waitMs ?? 500);
+        } else {
+          ok = false;
+        }
+        break;
+      }
+
+      case "closetab": {
+        const closedPage = session.page;
+        const prevIdx = Math.max(0, session.tabs.indexOf(closedPage) - 1);
+        session.tabs.splice(session.tabs.indexOf(closedPage), 1);
+        await closedPage.close();
+        if (session.tabs.length > 0) {
+          session.page = session.tabs[prevIdx] ?? session.tabs[session.tabs.length - 1];
+          page = session.page;
+          await page.bringToFront();
+        }
+        await page.waitForTimeout(step.waitMs ?? 500);
+        break;
+      }
+
+      default:
+        ok = false;
     }
-  } catch (e: unknown) {
-    res.status(500).json({ error: e instanceof Error ? e.message : String(e) });
+  } catch (err) {
+    ok = false;
   }
+
+  const newUrl = session.page.url();
+  if (newUrl !== session.currentUrl) {
+    step.navigatedTo = newUrl;
+    session.currentUrl = newUrl;
+  }
+
+  session.steps.push(step);
+  res.json({ ok, step, url: newUrl, tabCount: session.tabs.length });
 });
 
 // ─── GET /api/record/session/:id/text  (copy visible text) ──────────────────

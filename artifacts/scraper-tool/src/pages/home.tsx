@@ -27,10 +27,18 @@ import type { ScrapeResult } from "@workspace/api-client-react/src/generated/api
 // ─── Recorder types ───────────────────────────────────────────────────────────
 type RecordedStep = {
   id: string;
-  type: "click" | "type" | "select";
-  selector: string;
+  type: string;
+  selector?: string;
+  url?: string;
   text?: string;
+  key?: string;
   value?: string;
+  waitMs?: number;
+  tabIndex?: number;
+  listenFor?: string;
+  listenTimeout?: number;
+  varName?: string;
+  incognito?: boolean;
   label?: string;
   navigatedTo?: string;
 };
@@ -207,8 +215,11 @@ export default function Home() {
   const [screenshotUrl, setScreenshotUrl] = useState("");
   const [sessionCurrentUrl, setSessionCurrentUrl] = useState("");
   const [sessionLoading, setSessionLoading] = useState(false);
-  const [typeText, setTypeText] = useState("");
   const [panelCollapsed, setPanelCollapsed] = useState(false);
+  const [recFormType, setRecFormType] = useState<string | null>(null);
+  const [recFormValues, setRecFormValues] = useState<Record<string, string | number>>({});
+  const [recStepPending, setRecStepPending] = useState(false);
+  const [recTabCount, setRecTabCount] = useState(1);
   const overlayRef = useRef<HTMLDivElement>(null);
   const esRef = useRef<EventSource | null>(null);
   const recStepIdRef = useRef(0);
@@ -365,7 +376,9 @@ export default function Home() {
     setScreenshotUrl("");
     setSessionCurrentUrl("");
     setSessionLoading(false);
-    setTypeText("");
+    setRecFormType(null);
+    setRecFormValues({});
+    setRecTabCount(1);
   }, [sessionId]);
 
   const startRecording = useCallback(async () => {
@@ -410,52 +423,31 @@ export default function Home() {
     }
   }, [form, toast, stopRecording]);
 
-  // Interact helpers
-  const sendInteract = useCallback(async (body: object) => {
-    if (!sessionId) return null;
-    const resp = await fetch(`/api/record/session/${sessionId}/interact`, {
-      method: "POST",
-      headers: { "Content-Type": "application/json" },
-      body: JSON.stringify(body),
-    });
-    return resp.ok ? resp.json() : null;
-  }, [sessionId]);
-
-  const handleOverlayClick = useCallback(async (e: React.MouseEvent<HTMLDivElement>) => {
-    const rect = overlayRef.current?.getBoundingClientRect();
-    if (!rect) return;
-    const x = (e.clientX - rect.left) / rect.width;
-    const y = (e.clientY - rect.top) / rect.height;
-    const result = await sendInteract({ action: "click", x, y }) as { step?: RecordedStep; url?: string } | null;
-    if (result?.step) {
+  // ── Send a step to backend (execute + record) ────────────────────────────
+  const sendStep = useCallback(async (stepPayload: Omit<RecordedStep, "id">) => {
+    if (!sessionId) return;
+    setRecStepPending(true);
+    try {
+      const resp = await fetch(`/api/record/session/${sessionId}/step`, {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify(stepPayload),
+      });
+      if (!resp.ok) throw new Error(`HTTP ${resp.status}`);
+      const result = await resp.json() as { ok: boolean; step: RecordedStep; url: string; tabCount: number };
       const newId = String(++recStepIdRef.current);
-      // eslint-disable-next-line @typescript-eslint/no-unused-vars
-      const { id: _ignored, ...stepRest } = result.step as RecordedStep & { id?: string };
-      setRecordedSteps((s) => [...s, { id: newId, ...stepRest }]);
+      setRecordedSteps((s) => [...s, { id: newId, ...result.step }]);
+      if (result.url) setSessionCurrentUrl(result.url);
+      if (result.tabCount) setRecTabCount(result.tabCount);
+      setRecFormType(null);
+      setRecFormValues({});
+      if (!result.ok) toast({ title: "步骤执行失败", description: "选择器或参数可能有误，已记录供参考", variant: "destructive" });
+    } catch (err) {
+      toast({ title: "发送失败", description: String(err), variant: "destructive" });
+    } finally {
+      setRecStepPending(false);
     }
-    if (result?.url) setSessionCurrentUrl(result.url);
-  }, [sendInteract]);
-
-  const handleOverlayScroll = useCallback((e: React.WheelEvent<HTMLDivElement>) => {
-    const rect = overlayRef.current?.getBoundingClientRect();
-    if (!rect) return;
-    const x = (e.clientX - rect.left) / rect.width;
-    const y = (e.clientY - rect.top) / rect.height;
-    sendInteract({ action: "scroll", x, y, deltaY: e.deltaY > 0 ? 250 : -250 });
-  }, [sendInteract]);
-
-  const sendKey = useCallback((key: string) => {
-    sendInteract({ action: "key", key }).then((r: { url?: string } | null) => {
-      if (r?.url) setSessionCurrentUrl(r.url);
-    });
-  }, [sendInteract]);
-
-  const sendType = useCallback(() => {
-    const t = typeText.trim();
-    if (!t) return;
-    sendInteract({ action: "type", text: t });
-    setTypeText("");
-  }, [sendInteract, typeText]);
+  }, [sessionId, toast]);
 
   const copyPageText = useCallback(async () => {
     if (!sessionId) return;
@@ -471,17 +463,13 @@ export default function Home() {
 
   const applyRecordedSteps = useCallback(() => {
     recordedSteps.forEach((rs) => {
-      if (rs.type === "click") {
-        appendStep({ type: "click", selector: rs.selector, waitMs: 1500 });
-      } else if (rs.type === "type") {
-        appendStep({ type: "type", selector: rs.selector, text: rs.text ?? "", waitMs: 500 });
-      } else if (rs.type === "select") {
-        appendStep({ type: "select", selector: rs.selector, value: rs.value ?? "", waitMs: 500 });
-      }
+      // Map every recorded step directly to a form step — all fields are compatible
+      const { id: _id, label: _label, navigatedTo: _nav, ...rest } = rs;
+      appendStep(rest as FormValues["steps"][number]);
     });
-    setIsRecording(false);
+    stopRecording();
     toast({ title: `已添加 ${recordedSteps.length} 个步骤`, description: "可在左侧步骤列表中查看和调整" });
-  }, [recordedSteps, appendStep, toast]);
+  }, [recordedSteps, appendStep, stopRecording, toast]);
 
   // ── Live watch helpers ────────────────────────────────────────────────────
 
@@ -1365,231 +1353,412 @@ export default function Home() {
 
 
     {/* ── Visual Recorder Overlay ─────────────────────────────────────────── */}
-    {isRecording && (
-      <div className="fixed inset-0 z-50 flex flex-col bg-background/95 backdrop-blur-sm animate-in fade-in">
-        {/* Top bar */}
-        <div className="flex items-center gap-2 px-3 sm:px-4 py-2.5 sm:py-3 border-b bg-background shadow-sm shrink-0">
-          <div className="flex items-center gap-1.5 shrink-0">
-            <span className="relative flex h-2.5 w-2.5">
-              <span className="animate-ping absolute inline-flex h-full w-full rounded-full bg-red-400 opacity-75" />
-              <span className="relative inline-flex rounded-full h-2.5 w-2.5 bg-red-500" />
-            </span>
-            <span className="text-xs sm:text-sm font-semibold text-red-600">录制中</span>
-          </div>
-          <div className="flex-1 flex items-center gap-1.5 min-w-0">
-            <Link2 className="h-3 w-3 text-muted-foreground shrink-0 hidden sm:block" />
-            <span className="text-[10px] sm:text-xs text-muted-foreground font-mono truncate">
-              {sessionCurrentUrl || "连接中…"}
-            </span>
-          </div>
-          {sessionLoading && (
-            <div className="flex items-center gap-1 text-xs text-muted-foreground shrink-0">
-              <Loader2 className="h-3 w-3 animate-spin" />
-              <span className="hidden sm:inline">启动浏览器…</span>
-            </div>
-          )}
-          <Button type="button" variant="ghost" size="sm" className="h-7 w-7 p-0 sm:w-auto sm:px-3 sm:gap-1.5 text-muted-foreground shrink-0" onClick={() => stopRecording()}>
-            <X className="h-4 w-4" /><span className="hidden sm:inline">关闭</span>
-          </Button>
-          <Button type="button" variant="destructive" size="sm" className="h-7 px-2 sm:px-3 gap-1.5 shrink-0 text-xs" onClick={() => stopRecording()}>
-            <StopCircle className="h-3.5 w-3.5" /><span className="hidden xs:inline">停止</span>
-          </Button>
-        </div>
+    {isRecording && (() => {
+      // ── helpers scoped to recorder render ─────────────────────────────────
+      const fv = recFormValues;
+      const setFv = (k: string, v: string | number) => setRecFormValues(prev => ({ ...prev, [k]: v }));
 
-        {/* Main content: remote browser + step log */}
-        <div className="flex flex-col md:flex-row flex-1 overflow-hidden">
-          {/* Remote browser canvas */}
-          <div className="flex-1 bg-zinc-950 min-h-0 flex flex-col overflow-hidden">
-            {/* Screenshot — natural 16:9, never stretched */}
-            <div className="relative flex-1 min-h-0 flex items-center justify-center overflow-hidden">
-              {sessionLoading || !screenshotUrl ? (
-                <div className="flex flex-col items-center justify-center gap-3 w-full h-full">
-                  <Loader2 className="h-8 w-8 animate-spin text-white/40" />
-                  <span className="text-sm text-white/40">正在启动浏览器…</span>
-                </div>
-              ) : (
-                /* Container keeps 16:9, scales to fit available area */
-                <div className="relative w-full" style={{ aspectRatio: "16/9", maxHeight: "100%", maxWidth: "calc((100vh - 160px) * 16 / 9)" }}>
-                  <img
-                    src={screenshotUrl}
-                    alt="远程浏览器"
-                    className="w-full h-full block"
-                    style={{ imageRendering: "auto" }}
-                    draggable={false}
-                  />
-                  {/* Invisible overlay — captures clicks and scrolls */}
-                  <div
-                    ref={overlayRef}
-                    className="absolute inset-0 cursor-crosshair"
-                    onClick={handleOverlayClick}
-                    onWheel={handleOverlayScroll}
-                  />
-                </div>
+      // Fields shown per step type
+      const needsSelector = ["click","doubleclick","rightclick","scroll","hover","listen","capture","type","select"].includes(recFormType ?? "");
+      const needsUrl      = ["navigate","newtab"].includes(recFormType ?? "");
+      const needsText     = recFormType === "type";
+      const needsKey      = recFormType === "key";
+      const needsValue    = recFormType === "select";
+      const needsTabIndex = recFormType === "switchtab";
+      const needsListen   = recFormType === "listen";
+      const needsVarName  = recFormType === "capture";
+      const noParams      = ["goback","goforward","reload","wait","screenshot","closetab"].includes(recFormType ?? "");
+
+      const COMMON_KEYS_LIST = ["Enter","Tab","Escape","Space","ArrowDown","ArrowUp","ArrowLeft","ArrowRight","Backspace","Delete"];
+
+      const buildPayload = (): Omit<RecordedStep,"id"> | null => {
+        if (!recFormType) return null;
+        const base: Omit<RecordedStep,"id"> = { type: recFormType };
+        if (needsSelector && !noParams) {
+          const sel = String(fv.selector ?? "").trim();
+          if (!sel && !["scroll"].includes(recFormType)) { toast({ title: "请填写选择器", variant: "destructive" }); return null; }
+          if (sel) base.selector = sel;
+        }
+        if (needsUrl) {
+          const url = String(fv.url ?? "").trim();
+          if (!url) { toast({ title: "请填写网址", variant: "destructive" }); return null; }
+          base.url = url;
+        }
+        if (needsText) base.text = String(fv.text ?? "");
+        if (needsKey) base.key = String(fv.key ?? "Enter");
+        if (needsValue) base.value = String(fv.value ?? "");
+        if (needsTabIndex) base.tabIndex = Number(fv.tabIndex ?? 0);
+        if (needsListen) { base.listenFor = String(fv.listenFor ?? "appear"); base.listenTimeout = Number(fv.listenTimeout ?? 15000); }
+        if (needsVarName) { base.varName = String(fv.varName ?? "").trim(); }
+        if (fv.waitMs) base.waitMs = Number(fv.waitMs);
+        return base;
+      };
+
+      const handleExecute = () => {
+        const payload = buildPayload();
+        if (payload) sendStep(payload);
+      };
+
+      const recStepDef = STEP_TYPES.find(t => t.type === recFormType);
+      const RecStepIcon = recStepDef?.icon;
+
+      return (
+        <div className="fixed inset-0 z-50 flex flex-col bg-background/95 backdrop-blur-sm animate-in fade-in">
+          {/* Top bar */}
+          <div className="flex items-center gap-2 px-3 sm:px-4 py-2.5 sm:py-3 border-b bg-background shadow-sm shrink-0">
+            <div className="flex items-center gap-1.5 shrink-0">
+              <span className="relative flex h-2.5 w-2.5">
+                <span className="animate-ping absolute inline-flex h-full w-full rounded-full bg-red-400 opacity-75" />
+                <span className="relative inline-flex rounded-full h-2.5 w-2.5 bg-red-500" />
+              </span>
+              <span className="text-xs sm:text-sm font-semibold text-red-600">录制中</span>
+            </div>
+            <div className="flex-1 flex items-center gap-1.5 min-w-0">
+              <Link2 className="h-3 w-3 text-muted-foreground shrink-0 hidden sm:block" />
+              <span className="text-[10px] sm:text-xs text-muted-foreground font-mono truncate">
+                {sessionCurrentUrl || "连接中…"}
+              </span>
+              {recTabCount > 1 && (
+                <Badge variant="outline" className="text-[10px] font-mono shrink-0 border-sky-300 text-sky-600">
+                  {recTabCount} 个标签页
+                </Badge>
               )}
             </div>
-
-            {/* Action bar */}
-            <div className="shrink-0 bg-zinc-900 border-t border-zinc-700 px-3 py-2 space-y-2">
-              {/* Row 1 — page controls */}
-              <div className="flex items-center gap-2 flex-wrap">
-                {[
-                  { label: "↑ 向上", action: () => sendInteract({ action: "scroll", x: 0.5, y: 0.5, deltaY: -400 }) },
-                  { label: "↓ 向下", action: () => sendInteract({ action: "scroll", x: 0.5, y: 0.5, deltaY: 400 }) },
-                  { label: "⏎ 确认", action: () => sendKey("Enter") },
-                  { label: "Esc",    action: () => sendKey("Escape") },
-                  { label: "⌫ 退格", action: () => sendKey("Backspace") },
-                  { label: "⇥ Tab", action: () => sendKey("Tab") },
-                ].map(({ label, action }) => (
-                  <button
-                    key={label}
-                    type="button"
-                    onClick={action}
-                    className="px-3 py-1.5 rounded-md text-xs font-medium bg-zinc-700 text-zinc-100 hover:bg-zinc-600 active:bg-zinc-500 border border-zinc-600 transition-colors whitespace-nowrap"
-                  >
-                    {label}
-                  </button>
-                ))}
-                {/* Copy text button — pulls visible text from real DOM */}
-                <button
-                  type="button"
-                  onClick={copyPageText}
-                  className="ml-auto px-3 py-1.5 rounded-md text-xs font-medium bg-zinc-800 text-zinc-300 hover:bg-zinc-700 border border-zinc-600 transition-colors whitespace-nowrap"
-                >
-                  📋 复制页面文字
-                </button>
+            {sessionLoading && (
+              <div className="flex items-center gap-1 text-xs text-muted-foreground shrink-0">
+                <Loader2 className="h-3 w-3 animate-spin" />
+                <span className="hidden sm:inline">启动浏览器…</span>
               </div>
-              {/* Row 2 — type text into focused field */}
-              <div className="flex gap-2">
-                <input
-                  type="text"
-                  value={typeText}
-                  onChange={e => setTypeText(e.target.value)}
-                  onKeyDown={e => { if (e.key === "Enter") { e.preventDefault(); sendType(); } }}
-                  placeholder="在输入框输入文字，回车发送到浏览器…"
-                  className="flex-1 min-w-0 px-3 py-1.5 text-sm rounded-md bg-zinc-800 text-zinc-100 border border-zinc-600 placeholder:text-zinc-500 focus:outline-none focus:border-blue-500"
-                />
-                <button
-                  type="button"
-                  onClick={sendType}
-                  className="px-4 py-1.5 text-sm rounded-md bg-blue-600 text-white hover:bg-blue-500 border border-blue-500 whitespace-nowrap transition-colors"
-                >
-                  发送
-                </button>
-              </div>
-            </div>
+            )}
+            <Button type="button" variant="ghost" size="sm" className="h-7 w-7 p-0 sm:w-auto sm:px-3 sm:gap-1.5 text-muted-foreground shrink-0" onClick={() => stopRecording()}>
+              <X className="h-4 w-4" /><span className="hidden sm:inline">关闭</span>
+            </Button>
+            <Button type="button" variant="destructive" size="sm" className="h-7 px-2 sm:px-3 gap-1.5 shrink-0 text-xs" onClick={() => stopRecording()}>
+              <StopCircle className="h-3.5 w-3.5" /><span className="hidden xs:inline">停止</span>
+            </Button>
           </div>
 
-          {/* Step log panel — collapsible */}
-          <div className={`
-            border-t md:border-t-0 md:border-l flex flex-col bg-muted/20 shrink-0 transition-all duration-200
-            ${panelCollapsed
-              ? "w-full md:w-10 max-h-12 md:max-h-none overflow-hidden"
-              : "w-full md:w-72 lg:w-80 max-h-[42vh] md:max-h-none"
-            }
-          `}>
-            {/* Panel header — always visible */}
-            <div className="flex items-center justify-between px-3 py-2 border-b bg-background shrink-0">
-              {!panelCollapsed && (
-                <div className="flex items-center gap-2 text-sm font-medium min-w-0">
-                  <Activity className="h-4 w-4 text-primary shrink-0" />
-                  <span className="truncate">已录制</span>
-                  <Badge variant="secondary" className="font-mono text-xs shrink-0">
-                    {recordedSteps.length}
-                  </Badge>
-                </div>
-              )}
-              {panelCollapsed && (
-                <div className="flex items-center gap-1.5 text-xs text-muted-foreground md:flex-col md:gap-0">
-                  <Activity className="h-3.5 w-3.5 text-primary" />
-                  <span className="font-mono md:hidden">{recordedSteps.length} 步</span>
-                </div>
-              )}
-              <div className={`flex items-center gap-1 shrink-0 ${panelCollapsed ? "ml-auto" : ""}`}>
-                {!panelCollapsed && recordedSteps.length > 0 && (
-                  <Button type="button" variant="ghost" size="sm" className="h-6 px-1.5 text-xs text-muted-foreground"
-                    onClick={() => setRecordedSteps((s) => s.slice(0, -1))}>
-                    <Undo2 className="h-3 w-3" />
-                  </Button>
-                )}
-                <Button type="button" variant="ghost" size="sm"
-                  className="h-6 w-6 p-0 text-muted-foreground"
-                  onClick={() => setPanelCollapsed(c => !c)}
-                  title={panelCollapsed ? "展开步骤面板" : "收起步骤面板"}
-                >
-                  {panelCollapsed
-                    ? <ChevronUp className="h-3.5 w-3.5 md:rotate-90" />
-                    : <ChevronDown className="h-3.5 w-3.5 md:rotate-90" />
-                  }
-                </Button>
-              </div>
-            </div>
+          {/* Main area */}
+          <div className="flex flex-col md:flex-row flex-1 overflow-hidden">
 
-            {/* Panel body — hidden when collapsed */}
-            {!panelCollapsed && (
-              <>
-                <ScrollArea className="flex-1 min-h-0">
-                  {recordedSteps.length === 0 ? (
-                    <div className="flex flex-col items-center justify-center h-32 text-center px-4">
-                      <MousePointerClick className="h-7 w-7 text-muted-foreground/30 mb-2" />
-                      <p className="text-xs text-muted-foreground">点击页面元素，操作自动记录在这里</p>
+            {/* Left: browser preview + step palette */}
+            <div className="flex-1 bg-zinc-950 min-h-0 flex flex-col overflow-hidden">
+
+              {/* Screenshot (read-only) */}
+              <div className="relative flex-1 min-h-0 flex items-center justify-center overflow-hidden">
+                {sessionLoading || !screenshotUrl ? (
+                  <div className="flex flex-col items-center justify-center gap-3 w-full h-full">
+                    <Loader2 className="h-8 w-8 animate-spin text-white/40" />
+                    <span className="text-sm text-white/40">正在启动浏览器…</span>
+                  </div>
+                ) : (
+                  <div className="relative w-full" style={{ aspectRatio: "16/9", maxHeight: "100%", maxWidth: "calc((100vh - 200px) * 16 / 9)" }}>
+                    <img
+                      src={screenshotUrl}
+                      alt="远程浏览器"
+                      className="w-full h-full block"
+                      style={{ imageRendering: "auto" }}
+                      draggable={false}
+                    />
+                    <div ref={overlayRef} className="absolute inset-0" />
+                    {/* Overlay hint */}
+                    <div className="absolute bottom-2 left-2 right-2 flex justify-center pointer-events-none">
+                      <span className="text-[10px] bg-black/60 text-white/70 rounded px-2 py-0.5">
+                        实时预览 — 点击下方按钮操作网页
+                      </span>
                     </div>
-                  ) : (
-                    <div className="p-2 space-y-1.5">
-                      {recordedSteps.map((rs, i) => {
-                        const stepDef = rs.type === "click"
-                          ? { label: "点击", icon: MousePointerClick, color: "blue" }
-                          : rs.type === "type"
-                          ? { label: "输入", icon: Type, color: "green" }
-                          : { label: "选择", icon: ListOrdered, color: "cyan" };
-                        const colors = COLOR_MAP[stepDef.color];
-                        const Icon = stepDef.icon;
-                        return (
-                          <div key={rs.id} className={`rounded-md border p-2 ${colors.bg} ${colors.border} animate-in slide-in-from-bottom-1`}>
-                            <div className="flex items-center gap-1.5 mb-0.5">
-                              <span className="text-[10px] font-mono text-muted-foreground w-4 shrink-0">{i + 1}</span>
-                              <Icon className="h-3 w-3 shrink-0 text-foreground/60" />
-                              <span className="text-xs font-semibold">{stepDef.label}</span>
-                              {rs.navigatedTo && (
-                                <span className="text-[10px] text-indigo-500 ml-auto shrink-0">→ 跳页</span>
+                  </div>
+                )}
+              </div>
+
+              {/* Step palette + mini-form */}
+              <div className="shrink-0 bg-zinc-900 border-t border-zinc-700">
+                {/* Palette header */}
+                <div className="px-3 pt-2 pb-1 flex items-center justify-between">
+                  <span className="text-[10px] text-zinc-400 font-semibold uppercase tracking-wide">选择操作</span>
+                  <button type="button" onClick={copyPageText} className="text-[10px] text-zinc-400 hover:text-zinc-200 transition-colors">📋 复制页面文字</button>
+                </div>
+
+                {/* Step type grid */}
+                <div className="px-2 pb-2 grid grid-cols-4 sm:grid-cols-6 md:grid-cols-4 lg:grid-cols-5 xl:grid-cols-6 gap-1">
+                  {STEP_TYPES.map(({ type, label, icon: Icon, color }) => {
+                    const c = COLOR_MAP[color];
+                    const active = recFormType === type;
+                    return (
+                      <button
+                        key={type}
+                        type="button"
+                        disabled={recStepPending}
+                        onClick={() => {
+                          if (active) { setRecFormType(null); setRecFormValues({}); }
+                          else { setRecFormType(type); setRecFormValues({}); }
+                        }}
+                        className={`
+                          flex flex-col items-center gap-1 px-1 py-1.5 rounded-md text-center transition-all border text-[10px] font-medium
+                          ${active
+                            ? `${c.bg} ${c.border} text-foreground ring-1 ring-offset-1 ring-offset-zinc-900`
+                            : "bg-zinc-800 border-zinc-700 text-zinc-300 hover:bg-zinc-700 hover:text-zinc-100"
+                          }
+                        `}
+                      >
+                        <Icon className="h-3.5 w-3.5 shrink-0" />
+                        <span className="leading-tight">{label}</span>
+                      </button>
+                    );
+                  })}
+                </div>
+
+                {/* Mini-form — appears when a step type is selected */}
+                {recFormType && (
+                  <div className="border-t border-zinc-700 px-3 py-2.5 bg-zinc-850 space-y-2 animate-in slide-in-from-bottom-2 duration-150">
+                    <div className="flex items-center gap-2 mb-1">
+                      {RecStepIcon && <RecStepIcon className="h-3.5 w-3.5 text-zinc-300" />}
+                      <span className="text-xs font-semibold text-zinc-200">{recStepDef?.label}</span>
+                      <span className="text-[10px] text-zinc-500 ml-1">{recStepDef?.desc}</span>
+                    </div>
+
+                    {needsSelector && (
+                      <div>
+                        <label className="text-[10px] text-zinc-400 block mb-0.5">CSS 选择器</label>
+                        <input
+                          type="text"
+                          value={String(fv.selector ?? "")}
+                          onChange={e => setFv("selector", e.target.value)}
+                          placeholder="#id、.class、input[name='q'] …"
+                          className="w-full px-2 py-1 text-xs rounded bg-zinc-800 text-zinc-100 border border-zinc-600 placeholder:text-zinc-500 focus:outline-none focus:border-blue-500 font-mono"
+                        />
+                      </div>
+                    )}
+                    {needsUrl && (
+                      <div>
+                        <label className="text-[10px] text-zinc-400 block mb-0.5">网址</label>
+                        <input
+                          type="text"
+                          value={String(fv.url ?? "")}
+                          onChange={e => setFv("url", e.target.value)}
+                          placeholder="https://example.com"
+                          className="w-full px-2 py-1 text-xs rounded bg-zinc-800 text-zinc-100 border border-zinc-600 placeholder:text-zinc-500 focus:outline-none focus:border-blue-500 font-mono"
+                        />
+                      </div>
+                    )}
+                    {needsText && (
+                      <div>
+                        <label className="text-[10px] text-zinc-400 block mb-0.5">输入内容</label>
+                        <input
+                          type="text"
+                          value={String(fv.text ?? "")}
+                          onChange={e => setFv("text", e.target.value)}
+                          placeholder="要输入的文字，支持 ${变量名}"
+                          className="w-full px-2 py-1 text-xs rounded bg-zinc-800 text-zinc-100 border border-zinc-600 placeholder:text-zinc-500 focus:outline-none focus:border-blue-500"
+                        />
+                      </div>
+                    )}
+                    {needsKey && (
+                      <div>
+                        <label className="text-[10px] text-zinc-400 block mb-0.5">按键</label>
+                        <div className="flex flex-wrap gap-1">
+                          {COMMON_KEYS_LIST.map(k => (
+                            <button key={k} type="button"
+                              onClick={() => setFv("key", k)}
+                              className={`px-2 py-0.5 rounded text-[10px] font-mono border transition-colors ${String(fv.key ?? "Enter") === k ? "bg-blue-600 border-blue-500 text-white" : "bg-zinc-800 border-zinc-600 text-zinc-300 hover:bg-zinc-700"}`}
+                            >{k}</button>
+                          ))}
+                        </div>
+                      </div>
+                    )}
+                    {needsValue && (
+                      <div>
+                        <label className="text-[10px] text-zinc-400 block mb-0.5">选项值（value 属性）</label>
+                        <input
+                          type="text"
+                          value={String(fv.value ?? "")}
+                          onChange={e => setFv("value", e.target.value)}
+                          placeholder="选项的 value 值"
+                          className="w-full px-2 py-1 text-xs rounded bg-zinc-800 text-zinc-100 border border-zinc-600 placeholder:text-zinc-500 focus:outline-none focus:border-blue-500 font-mono"
+                        />
+                      </div>
+                    )}
+                    {needsTabIndex && (
+                      <div>
+                        <label className="text-[10px] text-zinc-400 block mb-0.5">标签页编号（0 = 第一个）</label>
+                        <div className="flex gap-1">
+                          {Array.from({ length: recTabCount }).map((_, i) => (
+                            <button key={i} type="button"
+                              onClick={() => setFv("tabIndex", i)}
+                              className={`px-3 py-0.5 rounded text-[10px] font-mono border transition-colors ${Number(fv.tabIndex ?? 0) === i ? "bg-sky-600 border-sky-500 text-white" : "bg-zinc-800 border-zinc-600 text-zinc-300 hover:bg-zinc-700"}`}
+                            >标签 {i}</button>
+                          ))}
+                        </div>
+                      </div>
+                    )}
+                    {needsListen && (
+                      <div className="flex gap-2">
+                        <div className="flex-1">
+                          <label className="text-[10px] text-zinc-400 block mb-0.5">等待条件</label>
+                          <select
+                            value={String(fv.listenFor ?? "appear")}
+                            onChange={e => setFv("listenFor", e.target.value)}
+                            className="w-full px-2 py-1 text-xs rounded bg-zinc-800 text-zinc-100 border border-zinc-600 focus:outline-none"
+                          >
+                            <option value="appear">元素出现</option>
+                            <option value="disappear">元素消失</option>
+                            <option value="networkIdle">网络空闲</option>
+                          </select>
+                        </div>
+                        <div className="w-24">
+                          <label className="text-[10px] text-zinc-400 block mb-0.5">超时（毫秒）</label>
+                          <input type="number" value={String(fv.listenTimeout ?? 15000)} onChange={e => setFv("listenTimeout", e.target.value)}
+                            className="w-full px-2 py-1 text-xs rounded bg-zinc-800 text-zinc-100 border border-zinc-600 focus:outline-none font-mono" />
+                        </div>
+                      </div>
+                    )}
+                    {needsVarName && (
+                      <div>
+                        <label className="text-[10px] text-zinc-400 block mb-0.5">保存为变量名</label>
+                        <input
+                          type="text"
+                          value={String(fv.varName ?? "")}
+                          onChange={e => setFv("varName", e.target.value)}
+                          placeholder="myVar（后续步骤用 ${myVar} 引用）"
+                          className="w-full px-2 py-1 text-xs rounded bg-zinc-800 text-zinc-100 border border-zinc-600 placeholder:text-zinc-500 focus:outline-none focus:border-blue-500 font-mono"
+                        />
+                      </div>
+                    )}
+                    {/* waitMs — shown for all types except ones that don't need it */}
+                    {!["listen","capture"].includes(recFormType) && (
+                      <div className="flex items-center gap-2">
+                        <label className="text-[10px] text-zinc-400 shrink-0">执行后等待</label>
+                        <input
+                          type="number"
+                          value={String(fv.waitMs ?? "")}
+                          onChange={e => setFv("waitMs", e.target.value)}
+                          placeholder="毫秒（可选）"
+                          className="w-28 px-2 py-1 text-xs rounded bg-zinc-800 text-zinc-100 border border-zinc-600 placeholder:text-zinc-500 focus:outline-none font-mono"
+                        />
+                        <span className="text-[10px] text-zinc-500">ms</span>
+                      </div>
+                    )}
+
+                    <div className="flex gap-2 pt-0.5">
+                      <button
+                        type="button"
+                        disabled={recStepPending}
+                        onClick={handleExecute}
+                        className="flex-1 flex items-center justify-center gap-1.5 py-1.5 rounded-md text-xs font-semibold bg-blue-600 text-white hover:bg-blue-500 border border-blue-500 transition-colors disabled:opacity-50"
+                      >
+                        {recStepPending
+                          ? <><Loader2 className="h-3.5 w-3.5 animate-spin" />执行中…</>
+                          : <><Play className="h-3.5 w-3.5" />执行并记录</>
+                        }
+                      </button>
+                      <button
+                        type="button"
+                        onClick={() => { setRecFormType(null); setRecFormValues({}); }}
+                        className="px-3 py-1.5 rounded-md text-xs text-zinc-400 hover:text-zinc-200 bg-zinc-800 border border-zinc-600 hover:bg-zinc-700 transition-colors"
+                      >
+                        取消
+                      </button>
+                    </div>
+                  </div>
+                )}
+              </div>
+            </div>
+
+            {/* Right: step log panel */}
+            <div className={`
+              border-t md:border-t-0 md:border-l flex flex-col bg-muted/20 shrink-0 transition-all duration-200
+              ${panelCollapsed
+                ? "w-full md:w-10 max-h-12 md:max-h-none overflow-hidden"
+                : "w-full md:w-72 lg:w-80 max-h-[42vh] md:max-h-none"
+              }
+            `}>
+              <div className="flex items-center justify-between px-3 py-2 border-b bg-background shrink-0">
+                {!panelCollapsed && (
+                  <div className="flex items-center gap-2 text-sm font-medium min-w-0">
+                    <Activity className="h-4 w-4 text-primary shrink-0" />
+                    <span className="truncate">已记录步骤</span>
+                    <Badge variant="secondary" className="font-mono text-xs shrink-0">{recordedSteps.length}</Badge>
+                  </div>
+                )}
+                {panelCollapsed && (
+                  <div className="flex items-center gap-1.5 text-xs text-muted-foreground md:flex-col md:gap-0">
+                    <Activity className="h-3.5 w-3.5 text-primary" />
+                    <span className="font-mono md:hidden">{recordedSteps.length}</span>
+                  </div>
+                )}
+                <div className={`flex items-center gap-1 shrink-0 ${panelCollapsed ? "ml-auto" : ""}`}>
+                  {!panelCollapsed && recordedSteps.length > 0 && (
+                    <Button type="button" variant="ghost" size="sm" className="h-6 px-1.5 text-xs text-muted-foreground"
+                      onClick={() => setRecordedSteps(s => s.slice(0, -1))}>
+                      <Undo2 className="h-3 w-3" />
+                    </Button>
+                  )}
+                  <Button type="button" variant="ghost" size="sm" className="h-6 w-6 p-0 text-muted-foreground"
+                    onClick={() => setPanelCollapsed(c => !c)}>
+                    {panelCollapsed
+                      ? <ChevronUp className="h-3.5 w-3.5 md:rotate-90" />
+                      : <ChevronDown className="h-3.5 w-3.5 md:rotate-90" />}
+                  </Button>
+                </div>
+              </div>
+
+              {!panelCollapsed && (
+                <>
+                  <ScrollArea className="flex-1 min-h-0">
+                    {recordedSteps.length === 0 ? (
+                      <div className="flex flex-col items-center justify-center h-32 text-center px-4">
+                        <MousePointerClick className="h-7 w-7 text-muted-foreground/30 mb-2" />
+                        <p className="text-xs text-muted-foreground">点击下方按钮执行操作，步骤自动记录在这里</p>
+                      </div>
+                    ) : (
+                      <div className="p-2 space-y-1.5">
+                        {recordedSteps.map((rs, i) => {
+                          const def = STEP_TYPES.find(t => t.type === rs.type) ?? { label: rs.type, icon: Play, color: "slate" };
+                          const colors = COLOR_MAP[def.color];
+                          const Icon = def.icon;
+                          const summary = rs.selector ?? rs.url ?? rs.text ?? rs.key ?? rs.value ?? (rs.tabIndex !== undefined ? `标签 ${rs.tabIndex}` : "");
+                          return (
+                            <div key={rs.id} className={`rounded-md border p-2 ${colors.bg} ${colors.border} animate-in slide-in-from-bottom-1`}>
+                              <div className="flex items-center gap-1.5 mb-0.5">
+                                <span className="text-[10px] font-mono text-muted-foreground w-4 shrink-0">{i + 1}</span>
+                                <Icon className="h-3 w-3 shrink-0 text-foreground/60" />
+                                <span className="text-xs font-semibold">{def.label}</span>
+                                {rs.navigatedTo && <span className="text-[10px] text-indigo-500 ml-auto shrink-0">→ 跳页</span>}
+                              </div>
+                              {summary && (
+                                <code className="text-[10px] font-mono text-foreground/60 break-all leading-tight block ml-5 truncate">
+                                  {summary}
+                                </code>
+                              )}
+                              {rs.label && (
+                                <span className="text-[10px] text-muted-foreground ml-5 block truncate">"{rs.label}"</span>
                               )}
                             </div>
-                            <code className="text-[10px] font-mono text-foreground/60 break-all leading-tight block ml-5">
-                              {rs.selector}
-                            </code>
-                            {(rs.text || rs.label) && (
-                              <span className="text-[10px] text-muted-foreground ml-5 block truncate">
-                                {rs.text ? `"${rs.text}"` : rs.label}
-                              </span>
-                            )}
-                          </div>
-                        );
-                      })}
-                    </div>
-                  )}
-                </ScrollArea>
+                          );
+                        })}
+                      </div>
+                    )}
+                  </ScrollArea>
 
-                {/* Apply footer */}
-                <div className="p-2.5 border-t bg-background shrink-0 space-y-1.5">
-                  {recordedSteps.length > 0 ? (
-                    <Button type="button" className="w-full gap-2 h-8 text-sm" onClick={applyRecordedSteps}>
-                      <CheckCircle2 className="h-3.5 w-3.5" />
-                      应用 {recordedSteps.length} 个步骤
-                    </Button>
-                  ) : (
-                    <Button type="button" variant="outline" className="w-full h-8 text-sm" onClick={() => stopRecording()}>
-                      取消录制
-                    </Button>
-                  )}
-                  <p className="text-[10px] text-muted-foreground text-center leading-tight">
-                    应用后可在步骤列表中编辑调整
-                  </p>
-                </div>
-              </>
-            )}
+                  <div className="p-2.5 border-t bg-background shrink-0 space-y-1.5">
+                    {recordedSteps.length > 0 ? (
+                      <Button type="button" className="w-full gap-2 h-8 text-sm" onClick={applyRecordedSteps}>
+                        <CheckCircle2 className="h-3.5 w-3.5" />应用 {recordedSteps.length} 个步骤到方案
+                      </Button>
+                    ) : (
+                      <Button type="button" variant="outline" className="w-full h-8 text-sm" onClick={() => stopRecording()}>
+                        取消录制
+                      </Button>
+                    )}
+                    <p className="text-[10px] text-muted-foreground text-center leading-tight">应用后可在步骤列表中编辑调整</p>
+                  </div>
+                </>
+              )}
+            </div>
           </div>
         </div>
-      </div>
-    )}
+      );
+    })()}
     </>
   );
 }
