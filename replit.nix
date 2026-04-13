@@ -1,5 +1,6 @@
 {pkgs}: {
   deps = [
+    pkgs.xorg.xorgserver
     pkgs.chromium
     pkgs.mesa
     pkgs.xorg.libXrandr

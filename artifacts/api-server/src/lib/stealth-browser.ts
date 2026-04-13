@@ -1,8 +1,13 @@
 import { chromium, BrowserContext, BrowserContextOptions } from "playwright-core";
+import { spawn, execSync } from "child_process";
 
 export const CHROMIUM_PATH =
   process.env.CHROMIUM_PATH ||
   "/nix/store/qa9cnw4v5xkxyip6mb9kxqfq1z4x2dx1-chromium-138.0.7204.100/bin/chromium";
+
+const XVFB_PATH =
+  process.env.XVFB_PATH ||
+  "/nix/store/ykck7gdd6szwrb3qnpb5y5fvjlnmzhz0-xorg-server-21.1.18/bin/Xvfb";
 
 export const STEALTH_UA =
   "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/138.0.0.0 Safari/537.36";
@@ -98,11 +103,64 @@ const STEALTH_INIT_SCRIPT = `
 })();
 `;
 
-export async function launchStealthBrowser() {
+// ─── Xvfb management ─────────────────────────────────────────────────────────
+
+let xvfbProc: ReturnType<typeof spawn> | null = null;
+let xvfbDisplay = ":99";
+
+function isDisplayInUse(display: string): boolean {
+  try {
+    execSync(`ls /tmp/.X${display.replace(":", "")}-lock 2>/dev/null`, { stdio: "pipe" });
+    return true;
+  } catch {
+    return false;
+  }
+}
+
+async function ensureXvfb(): Promise<string> {
+  if (xvfbProc && !xvfbProc.killed) return xvfbDisplay;
+
+  // Find a free display number starting at :99
+  let dispNum = 99;
+  while (isDisplayInUse(`:${dispNum}`)) dispNum++;
+  xvfbDisplay = `:${dispNum}`;
+
+  await new Promise<void>((resolve, reject) => {
+    xvfbProc = spawn(XVFB_PATH, [
+      xvfbDisplay,
+      "-screen", "0", "1280x800x24",
+      "-ac",
+      "-nolisten", "tcp",
+    ], { stdio: "ignore" });
+
+    xvfbProc.on("error", reject);
+
+    // Give Xvfb ~300 ms to start listening
+    setTimeout(resolve, 300);
+  });
+
+  process.env.DISPLAY = xvfbDisplay;
+  console.log(`[stealth] Xvfb started on display ${xvfbDisplay}`);
+  return xvfbDisplay;
+}
+
+// ─── Browser launch ───────────────────────────────────────────────────────────
+
+export async function launchStealthBrowser(headed = false) {
+  const extraArgs: string[] = [];
+
+  if (headed) {
+    const display = await ensureXvfb();
+    process.env.DISPLAY = display;
+  } else {
+    extraArgs.push("--disable-gpu");
+  }
+
   return chromium.launch({
-    headless: true,
+    headless: !headed,
     executablePath: CHROMIUM_PATH,
-    args: LAUNCH_ARGS,
+    args: [...LAUNCH_ARGS, ...extraArgs],
+    env: headed ? { ...process.env } : undefined,
   });
 }
 

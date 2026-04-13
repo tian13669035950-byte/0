@@ -47,6 +47,7 @@ const ScrapeRequestSchema = z.object({
   url: z.string().url(),
   options: ScrapeOptionsSchema,
   proxy: z.string().optional(),
+  headed: z.boolean().optional(),
 });
 
 function parseProxy(raw?: string) {
@@ -100,10 +101,11 @@ async function runScrapeSession(
   emit: (event: StreamEvent) => void,
   watchId?: string,
   proxyRaw?: string,
+  headed?: boolean,
 ) {
   const startTime = Date.now();
   const proxy = parseProxy(proxyRaw);
-  const browser = await launchStealthBrowser();
+  const browser = await launchStealthBrowser(headed ?? false);
 
   try {
     const newCtx = () => newStealthContext(browser, proxy ? { proxy } : {});
@@ -554,7 +556,7 @@ router.post("/scrape/stream", async (req, res) => {
   write({ t: "watch_ready", watchId });
 
   try {
-    const result = await runScrapeSession(parsed.data.url, parsed.data.options, write, watchId, parsed.data.proxy);
+    const result = await runScrapeSession(parsed.data.url, parsed.data.options, write, watchId, parsed.data.proxy, parsed.data.headed);
     write({ t: "result", ...result });
   } catch (err) {
     write({ t: "error", message: err instanceof Error ? err.message : "Unknown error" });

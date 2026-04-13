@@ -63,14 +63,14 @@ function parseProxy(raw?: string) {
 }
 
 router.post("/record/session/start", async (req, res) => {
-  let { url, proxy: proxyRaw } = req.body as { url?: string; proxy?: string };
+  let { url, proxy: proxyRaw, headed } = req.body as { url?: string; proxy?: string; headed?: boolean };
   if (!url?.trim()) return res.status(400).json({ error: "Missing url" });
   if (!/^https?:\/\//i.test(url)) url = "https://" + url;
 
   const proxy = parseProxy(proxyRaw);
 
   try {
-    const browser = await launchStealthBrowser();
+    const browser = await launchStealthBrowser(headed ?? false);
     const ctx = await newStealthContext(browser, { viewport: VIEWPORT, ...(proxy ? { proxy } : {}) });
     const page = await ctx.newPage();
 

@@ -208,9 +208,11 @@ export default function Home() {
   const [watchUrl, setWatchUrl] = useState("");
   const watchEsRef = useRef<EventSource | null>(null);
 
-  // ── Proxy setting (persisted) ─────────────────────────────────────────────
+  // ── Proxy / headed settings (persisted) ──────────────────────────────────
   const [proxyUrl, setProxyUrl] = useState(() => localStorage.getItem("scraper-proxy") ?? "");
   const saveProxy = (v: string) => { setProxyUrl(v); if (v.trim()) localStorage.setItem("scraper-proxy", v); else localStorage.removeItem("scraper-proxy"); };
+  const [headedMode, setHeadedMode] = useState(() => localStorage.getItem("scraper-headed") === "1");
+  const saveHeaded = (v: boolean) => { setHeadedMode(v); if (v) localStorage.setItem("scraper-headed", "1"); else localStorage.removeItem("scraper-headed"); };
 
   // ── Recorder state ────────────────────────────────────────────────────────
   const [isRecording, setIsRecording] = useState(false);
@@ -323,12 +325,13 @@ export default function Home() {
   const buildRequest = useCallback((values: FormValues) => ({
     url: values.url,
     proxy: proxyUrl.trim() || undefined,
+    headed: headedMode || undefined,
     options: {
       headings: false, links: false, paragraphs: false, images: false, metaTags: false,
       steps: values.steps.length > 0 ? values.steps : undefined,
       customSelectors: values.customSelectors.length > 0 ? values.customSelectors : undefined,
     },
-  }), [proxyUrl]);
+  }), [proxyUrl, headedMode]);
 
   const addSnap = useCallback((data: ScrapeResult, iteration?: number, loopTotal?: number) => {
     const snap: Snapshot = { id: String(++snapshotIdRef.current), iteration, loopTotal, triggeredAt: new Date().toLocaleTimeString("zh-CN", { hour12: false }), duration: data.duration, result: data };
@@ -425,7 +428,7 @@ export default function Home() {
       const resp = await fetch("/api/record/session/start", {
         method: "POST",
         headers: { "Content-Type": "application/json" },
-        body: JSON.stringify({ url: url.trim(), proxy: proxyUrl.trim() || undefined }),
+        body: JSON.stringify({ url: url.trim(), proxy: proxyUrl.trim() || undefined, headed: headedMode || undefined }),
       });
       if (!resp.ok) throw new Error(await resp.text());
       const { sessionId: sid, url: finalUrl } = await resp.json() as { sessionId: string; url: string };
@@ -658,23 +661,40 @@ export default function Home() {
                       <FormMessage />
                     </FormItem>
                   )} />
-                  {/* Proxy setting */}
-                  <div className="pt-1">
-                    <label className="text-xs text-muted-foreground flex items-center gap-1.5 mb-1">
-                      <Shield className="h-3 w-3" />代理设置（可选，用于绕过验证码 IP 限制）
-                    </label>
-                    <Input
-                      placeholder="http://user:pass@host:port 或 socks5://host:port"
-                      className="font-mono text-xs h-8"
-                      value={proxyUrl}
-                      onChange={e => saveProxy(e.target.value)}
-                    />
-                    {proxyUrl.trim() && (
-                      <p className="text-[10px] text-amber-600 mt-1 flex items-center gap-1">
-                        <span className="inline-block w-1.5 h-1.5 rounded-full bg-amber-500" />
-                        所有请求将通过此代理发送
-                      </p>
-                    )}
+                  {/* Proxy + headed settings */}
+                  <div className="pt-1 space-y-2">
+                    <div>
+                      <label className="text-xs text-muted-foreground flex items-center gap-1.5 mb-1">
+                        <Shield className="h-3 w-3" />代理设置（可选，用于绕过验证码 IP 限制）
+                      </label>
+                      <Input
+                        placeholder="http://user:pass@host:port 或 socks5://host:port"
+                        className="font-mono text-xs h-8"
+                        value={proxyUrl}
+                        onChange={e => saveProxy(e.target.value)}
+                      />
+                      {proxyUrl.trim() && (
+                        <p className="text-[10px] text-amber-600 mt-1 flex items-center gap-1">
+                          <span className="inline-block w-1.5 h-1.5 rounded-full bg-amber-500" />
+                          所有请求将通过此代理发送
+                        </p>
+                      )}
+                    </div>
+                    <div className="flex items-center justify-between rounded-md border border-border/40 px-3 py-1.5 bg-muted/30">
+                      <div className="flex items-center gap-2">
+                        <Eye className="h-3 w-3 text-muted-foreground" />
+                        <span className="text-xs text-muted-foreground">有头模式（虚拟显示器，绕过部分检测）</span>
+                      </div>
+                      <button
+                        type="button"
+                        role="switch"
+                        aria-checked={headedMode}
+                        onClick={() => saveHeaded(!headedMode)}
+                        className={`relative inline-flex h-4 w-8 shrink-0 cursor-pointer rounded-full border-2 border-transparent transition-colors focus-visible:outline-none ${headedMode ? "bg-primary" : "bg-input"}`}
+                      >
+                        <span className={`pointer-events-none inline-block h-3 w-3 rounded-full bg-white shadow-lg ring-0 transition-transform ${headedMode ? "translate-x-4" : "translate-x-0"}`} />
+                      </button>
+                    </div>
                   </div>
                 </CardContent>
                 <CardFooter className="pt-0 pb-3">
