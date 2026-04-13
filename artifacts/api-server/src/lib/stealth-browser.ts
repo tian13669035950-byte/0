@@ -81,11 +81,6 @@ const STEALTH_INIT_SCRIPT = `
     };
   }
 
-  // 8. Hide headless in userAgent (already set via context but belt-and-suspenders)
-  Object.defineProperty(navigator, 'userAgent', {
-    get: () => navigator.userAgent.replace('HeadlessChrome', 'Chrome'),
-  });
-
   // 9. WebGL vendor / renderer strings (headless shows "Google SwiftShader")
   const getCtx = HTMLCanvasElement.prototype.getContext;
   HTMLCanvasElement.prototype.getContext = function(type, ...args) {
