@@ -6,6 +6,7 @@
  * OpenAPI spec version: 0.1.0
  */
 import type { CustomSelector } from "./customSelector";
+import type { ScrapeStep } from "./scrapeStep";
 
 export interface ScrapeOptions {
   headings: boolean;
@@ -22,4 +23,6 @@ export interface ScrapeOptions {
   waitForPopupClose?: boolean;
   /** Max milliseconds to wait for popup to close */
   popupTimeoutMs?: number;
+  /** Ordered sequence of actions to perform before scraping */
+  steps?: ScrapeStep[];
 }

@@ -10,6 +10,14 @@ const CustomSelectorSchema = z.object({
   selector: z.string(),
 });
 
+const ScrapeStepSchema = z.object({
+  type: z.enum(["click", "wait"]),
+  selector: z.string().optional(),
+  waitMs: z.number().optional(),
+  waitForPopupClose: z.boolean().optional(),
+  popupTimeoutMs: z.number().optional(),
+});
+
 const ScrapeOptionsSchema = z.object({
   headings: z.boolean(),
   links: z.boolean(),
@@ -21,6 +29,7 @@ const ScrapeOptionsSchema = z.object({
   clickWaitMs: z.number().optional(),
   waitForPopupClose: z.boolean().optional(),
   popupTimeoutMs: z.number().optional(),
+  steps: z.array(ScrapeStepSchema).optional(),
 });
 
 const ScrapeRequestSchema = z.object({
@@ -71,40 +80,52 @@ router.post("/scrape", async (req, res) => {
 
     let clickedElement: string | undefined;
 
-    if (options.clickSelector && options.clickSelector.trim()) {
-      const selector = options.clickSelector.trim();
-      try {
-        await page.waitForSelector(selector, { timeout: 5000 });
+    // Build the effective step list: prefer `steps` array; fall back to legacy clickSelector
+    const effectiveSteps = options.steps && options.steps.length > 0
+      ? options.steps
+      : options.clickSelector && options.clickSelector.trim()
+        ? [{
+            type: "click" as const,
+            selector: options.clickSelector.trim(),
+            waitMs: options.clickWaitMs ?? 2000,
+            waitForPopupClose: options.waitForPopupClose,
+            popupTimeoutMs: options.popupTimeoutMs,
+          }]
+        : [];
 
-        if (options.waitForPopupClose) {
-          // Listen for a new popup/window before clicking
-          const popupTimeout = options.popupTimeoutMs ?? 30000;
-          const popupPromise = page.context().waitForEvent("page", { timeout: popupTimeout });
-          await page.click(selector);
-          clickedElement = selector;
-          try {
-            // Wait for the popup to appear
-            const popup = await popupPromise;
-            req.log.info({ url: popup.url() }, "Popup detected, waiting for it to close");
-            // Wait until the popup is closed (its process ends)
-            await popup.waitForEvent("close", { timeout: popupTimeout });
-            req.log.info("Popup closed, proceeding to scrape main page");
-            // Extra buffer for the main page to reflect updates
-            const waitMs = options.clickWaitMs ?? 2000;
-            await page.waitForTimeout(waitMs);
-          } catch {
-            req.log.warn("Popup did not appear or timed out, falling back to fixed wait");
-            const waitMs = options.clickWaitMs ?? 2000;
-            await page.waitForTimeout(waitMs);
+    for (const step of effectiveSteps) {
+      if (step.type === "wait") {
+        const ms = step.waitMs ?? 1000;
+        req.log.info({ ms }, "Executing wait step");
+        await page.waitForTimeout(ms);
+      } else if (step.type === "click" && step.selector?.trim()) {
+        const selector = step.selector.trim();
+        try {
+          await page.waitForSelector(selector, { timeout: 5000 });
+          if (step.waitForPopupClose) {
+            const popupTimeout = step.popupTimeoutMs ?? 30000;
+            const popupPromise = page.context().waitForEvent("page", { timeout: popupTimeout });
+            await page.click(selector);
+            clickedElement = selector;
+            req.log.info({ selector }, "Clicked element, waiting for popup");
+            try {
+              const popup = await popupPromise;
+              req.log.info({ url: popup.url() }, "Popup detected, waiting for close");
+              await popup.waitForEvent("close", { timeout: popupTimeout });
+              req.log.info("Popup closed");
+            } catch {
+              req.log.warn("Popup timed out, using fixed wait");
+            }
+          } else {
+            await page.click(selector);
+            clickedElement = selector;
+            req.log.info({ selector }, "Clicked element");
           }
-        } else {
-          await page.click(selector);
-          clickedElement = selector;
-          const waitMs = options.clickWaitMs ?? 2000;
+          const waitMs = step.waitMs ?? 2000;
           await page.waitForTimeout(waitMs);
+        } catch {
+          req.log.warn({ selector }, "Click step failed: element not found");
         }
-      } catch {
-        req.log.warn({ selector }, "clickSelector not found or click failed");
       }
     }
 

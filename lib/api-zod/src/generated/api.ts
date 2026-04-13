@@ -53,6 +53,34 @@ export const StartScrapeBody = zod.object({
       .number()
       .optional()
       .describe("Max milliseconds to wait for popup to close"),
+    steps: zod
+      .array(
+        zod.object({
+          type: zod
+            .enum(["click", "wait"])
+            .describe("click: click an element; wait: pause for N ms"),
+          selector: zod
+            .string()
+            .optional()
+            .describe("CSS selector (required for click steps)"),
+          waitMs: zod
+            .number()
+            .optional()
+            .describe(
+              "Milliseconds to wait (for wait steps, or after a click)",
+            ),
+          waitForPopupClose: zod
+            .boolean()
+            .optional()
+            .describe("Wait for a popup to open and close after this click"),
+          popupTimeoutMs: zod
+            .number()
+            .optional()
+            .describe("Max ms to wait for popup to close"),
+        }),
+      )
+      .optional()
+      .describe("Ordered sequence of actions to perform before scraping"),
   }),
 });
 

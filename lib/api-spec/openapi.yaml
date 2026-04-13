@@ -120,12 +120,38 @@ components:
         popupTimeoutMs:
           type: number
           description: Max milliseconds to wait for popup to close
+        steps:
+          type: array
+          description: Ordered sequence of actions to perform before scraping
+          items:
+            $ref: "#/components/schemas/ScrapeStep"
       required:
         - headings
         - links
         - paragraphs
         - images
         - metaTags
+    ScrapeStep:
+      type: object
+      properties:
+        type:
+          type: string
+          enum: [click, wait]
+          description: "click: click an element; wait: pause for N ms"
+        selector:
+          type: string
+          description: CSS selector (required for click steps)
+        waitMs:
+          type: number
+          description: Milliseconds to wait (for wait steps, or after a click)
+        waitForPopupClose:
+          type: boolean
+          description: Wait for a popup to open and close after this click
+        popupTimeoutMs:
+          type: number
+          description: Max ms to wait for popup to close
+      required:
+        - type
     CustomSelector:
       type: object
       properties:

@@ -16,6 +16,30 @@ export interface CustomSelector {
   selector: string;
 }
 
+/**
+ * click: click an element; wait: pause for N ms
+ */
+export type ScrapeStepType =
+  (typeof ScrapeStepType)[keyof typeof ScrapeStepType];
+
+export const ScrapeStepType = {
+  click: "click",
+  wait: "wait",
+} as const;
+
+export interface ScrapeStep {
+  /** click: click an element; wait: pause for N ms */
+  type: ScrapeStepType;
+  /** CSS selector (required for click steps) */
+  selector?: string;
+  /** Milliseconds to wait (for wait steps, or after a click) */
+  waitMs?: number;
+  /** Wait for a popup to open and close after this click */
+  waitForPopupClose?: boolean;
+  /** Max ms to wait for popup to close */
+  popupTimeoutMs?: number;
+}
+
 export interface ScrapeOptions {
   headings: boolean;
   links: boolean;
@@ -31,6 +55,8 @@ export interface ScrapeOptions {
   waitForPopupClose?: boolean;
   /** Max milliseconds to wait for popup to close */
   popupTimeoutMs?: number;
+  /** Ordered sequence of actions to perform before scraping */
+  steps?: ScrapeStep[];
 }
 
 export interface ScrapeRequest {
