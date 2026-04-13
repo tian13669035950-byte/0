@@ -324,16 +324,34 @@ export default function Home() {
 
   // ── Scrape ────────────────────────────────────────────────────────────────
 
-  const buildRequest = useCallback((values: FormValues) => ({
-    url: values.url,
-    proxy: proxyUrl.trim() || undefined,
-    headed: headedMode || undefined,
-    options: {
-      headings: false, links: false, paragraphs: false, images: false, metaTags: false,
-      steps: values.steps.length > 0 ? values.steps : undefined,
-      customSelectors: values.customSelectors.length > 0 ? values.customSelectors : undefined,
-    },
-  }), [proxyUrl, headedMode]);
+  const buildRequest = useCallback((values: FormValues) => {
+    const normalizeUrl = (u: string) => {
+      const t = u.trim();
+      if (!t || /^https?:\/\//i.test(t)) return t;
+      return `https://${t}`;
+    };
+    const cleanStep = (s: Step) => {
+      const c = { ...s } as Partial<Step> & { type: string };
+      if (c.listenFor === "") delete c.listenFor;
+      if (c.selector === "") delete c.selector;
+      if ((c as Step & { url?: string }).url === "") delete (c as Step & { url?: string }).url;
+      if (c.text === "") delete c.text;
+      if (c.key === "") delete c.key;
+      if ((c as Step & { value?: string }).value === "") delete (c as Step & { value?: string }).value;
+      if (c.varName === "") delete c.varName;
+      return c;
+    };
+    return {
+      url: normalizeUrl(values.url),
+      proxy: proxyUrl.trim() || undefined,
+      headed: headedMode || undefined,
+      options: {
+        headings: false, links: false, paragraphs: false, images: false, metaTags: false,
+        steps: values.steps.length > 0 ? values.steps.map(cleanStep) : undefined,
+        customSelectors: values.customSelectors.length > 0 ? values.customSelectors : undefined,
+      },
+    };
+  }, [proxyUrl, headedMode]);
 
   const addSnap = useCallback((data: ScrapeResult, iteration?: number, loopTotal?: number) => {
     const snap: Snapshot = { id: String(++snapshotIdRef.current), iteration, loopTotal, triggeredAt: new Date().toLocaleTimeString("zh-CN", { hour12: false }), duration: data.duration, result: data };

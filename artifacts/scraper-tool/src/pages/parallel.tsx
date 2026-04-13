@@ -54,6 +54,28 @@ const loadSequences = (): SavedSequence[] => {
 
 const TRACK_LABELS = ["A", "B", "C", "D", "E", "F"];
 
+// Sanitize a URL: auto-prepend https:// if no protocol is present
+function normalizeUrl(url: string): string {
+  const trimmed = url.trim();
+  if (!trimmed) return trimmed;
+  if (/^https?:\/\//i.test(trimmed)) return trimmed;
+  return `https://${trimmed}`;
+}
+
+// Remove empty-string values from optional enum/string fields so backend validation passes
+function cleanStep(step: Step): Step {
+  const s = { ...step };
+  // Remove empty strings from optional fields that have enum constraints on the backend
+  if (s.listenFor === "") delete s.listenFor;
+  if (s.selector === "") delete s.selector;
+  if (s.url === "") delete s.url;
+  if (s.text === "") delete s.text;
+  if (s.key === "") delete s.key;
+  if (s.value === "") delete s.value;
+  if (s.varName === "") delete s.varName;
+  return s;
+}
+
 export default function Parallel() {
   const { toast } = useToast();
   const [sequences, setSequences] = useState<SavedSequence[]>(loadSequences);
@@ -131,13 +153,13 @@ export default function Parallel() {
 
     const payload = {
       tracks: resolvedTracks.map(({ seq, url, idx }) => ({
-        url: url!,
+        url: normalizeUrl(url!),
         label: `轨道 ${TRACK_LABELS[idx]}`,
         proxy: proxyUrl || undefined,
         headed: headedMode || undefined,
         options: {
           headings: false, links: false, paragraphs: false, images: false, metaTags: false,
-          steps: seq!.steps,
+          steps: (seq!.steps ?? []).map(cleanStep),
         },
       })),
     };

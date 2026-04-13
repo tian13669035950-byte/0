@@ -18,7 +18,7 @@ const ScrapeStepSchema = z.object({
   waitMs: z.number().optional(),
   waitForPopupClose: z.boolean().optional(),
   popupTimeoutMs: z.number().optional(),
-  listenFor: z.enum(["appear", "disappear", "networkIdle"]).optional(),
+  listenFor: z.string().optional(),
   listenTimeout: z.number().optional(),
   text: z.string().optional(),
   key: z.string().optional(),
@@ -608,7 +608,9 @@ router.post("/parallel/stream", async (req, res) => {
 
   const parsed = schema.safeParse(req.body);
   if (!parsed.success) {
-    res.status(400).json({ error: "bad_request", message: "Invalid request body" });
+    const details = parsed.error.issues.map(i => `${i.path.join(".")}: ${i.message}`).join("; ");
+    req.log?.warn({ validationErrors: details }, "parallel/stream bad request");
+    res.status(400).json({ error: "bad_request", message: `Validation failed: ${details}` });
     return;
   }
 
