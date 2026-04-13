@@ -19,7 +19,7 @@ import {
   TrendingUp, ChevronDown, ChevronUp, ExternalLink, Repeat, Square,
   Play, ArrowUp, ArrowDown, Timer, Save, FolderOpen, X,
   Keyboard, ListOrdered, Eye, MoveDown, Type, Activity,
-  Video, StopCircle, Undo2, Link2,
+  Video, StopCircle, Undo2, Link2, Download, Upload,
 } from "lucide-react";
 import type { ScrapeResult } from "@workspace/api-client-react/src/generated/api.schemas";
 
@@ -193,6 +193,43 @@ export default function Home() {
   };
   const loadSequence = (seq: SavedSequence) => { form.setValue("steps", seq.steps as FormValues["steps"]); toast({ title: `已加载"${seq.name}"` }); };
   const deleteSequence = (name: string) => { const u = savedSequences.filter((s) => s.name !== name); setSavedSequences(u); persistSequences(u); };
+
+  // ── Export / Import ────────────────────────────────────────────────────────
+  const importFileRef = useRef<HTMLInputElement>(null);
+
+  const exportSequences = () => {
+    if (savedSequences.length === 0) { toast({ title: "没有可导出的方案", variant: "destructive" }); return; }
+    const blob = new Blob([JSON.stringify(savedSequences, null, 2)], { type: "application/json" });
+    const url = URL.createObjectURL(blob);
+    const a = document.createElement("a");
+    a.href = url;
+    a.download = `scraper-sequences-${new Date().toISOString().slice(0, 10)}.json`;
+    a.click();
+    URL.revokeObjectURL(url);
+    toast({ title: `已导出 ${savedSequences.length} 个方案` });
+  };
+
+  const importSequences = (e: React.ChangeEvent<HTMLInputElement>) => {
+    const file = e.target.files?.[0];
+    if (!file) return;
+    const reader = new FileReader();
+    reader.onload = () => {
+      try {
+        const data = JSON.parse(reader.result as string) as SavedSequence[];
+        if (!Array.isArray(data)) throw new Error("格式不正确");
+        // Merge: imported sequences override existing ones with same name
+        const merged = [...data];
+        savedSequences.forEach((s) => { if (!merged.find((m) => m.name === s.name)) merged.push(s); });
+        setSavedSequences(merged);
+        persistSequences(merged);
+        toast({ title: `已导入 ${data.length} 个方案`, description: "同名方案已覆盖" });
+      } catch {
+        toast({ title: "导入失败", description: "文件格式不正确，请选择之前导出的 JSON 文件", variant: "destructive" });
+      }
+    };
+    reader.readAsText(file);
+    e.target.value = "";
+  };
 
   // ── Scrape ────────────────────────────────────────────────────────────────
 
@@ -725,6 +762,16 @@ export default function Home() {
                       </button>
                     </div>
                   ))}
+                  {/* Export / Import */}
+                  <div className="ml-auto flex items-center gap-1.5">
+                    <Button type="button" variant="ghost" size="sm" className="text-xs h-7 gap-1.5 text-muted-foreground" onClick={exportSequences} title="导出所有方案为 JSON 文件">
+                      <Download className="h-3 w-3" />导出
+                    </Button>
+                    <Button type="button" variant="ghost" size="sm" className="text-xs h-7 gap-1.5 text-muted-foreground" onClick={() => importFileRef.current?.click()} title="从 JSON 文件导入方案">
+                      <Upload className="h-3 w-3" />导入
+                    </Button>
+                    <input ref={importFileRef} type="file" accept=".json,application/json" className="hidden" onChange={importSequences} />
+                  </div>
                 </div>
               </Card>
 
