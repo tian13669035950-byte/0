@@ -20,7 +20,7 @@ import {
   Play, ArrowUp, ArrowDown, Timer, Save, FolderOpen, X,
   Keyboard, ListOrdered, Eye, MoveDown, Type, Activity,
   Video, StopCircle, Undo2, Link2, Download, Upload,
-  RefreshCw, Camera, ChevronRight, MousePointer2,
+  RefreshCw, Camera, ChevronRight, MousePointer2, ArrowLeftRight,
 } from "lucide-react";
 import type { ScrapeResult } from "@workspace/api-client-react/src/generated/api.schemas";
 
@@ -54,6 +54,9 @@ const STEP_TYPES = [
   { type: "listen",      label: "监听",     icon: Eye,               color: "purple",  desc: "等到某个元素出现/消失，或网络空闲" },
   { type: "capture",     label: "读取保存", icon: Crosshair,         color: "teal",    desc: "读取元素内容，保存为变量供后续步骤使用" },
   { type: "screenshot",  label: "截图记录", icon: Camera,            color: "violet",  desc: "在此处暂停并记录截图状态（实时监控可见）" },
+  { type: "newtab",     label: "新建标签页", icon: Globe,            color: "indigo",  desc: "在同一浏览器内新开一个标签页，并切换到该标签" },
+  { type: "switchtab",  label: "切换标签页", icon: ArrowLeftRight,   color: "sky",     desc: "切换到指定编号的标签页（从 0 开始）" },
+  { type: "closetab",   label: "关闭标签页", icon: X,               color: "rose",    desc: "关闭当前标签页，自动切换回上一个标签" },
 ] as const;
 
 type StepType = typeof STEP_TYPES[number]["type"];
@@ -80,7 +83,7 @@ const COMMON_KEYS = ["Enter", "Tab", "Escape", "Space", "ArrowDown", "ArrowUp", 
 // ─── Zod schemas ─────────────────────────────────────────────────────────────
 
 const stepSchema = z.object({
-  type: z.enum(["click", "listen", "type", "key", "select", "scroll", "hover", "navigate", "capture", "goback", "goforward", "reload", "wait", "screenshot", "rightclick", "doubleclick"]),
+  type: z.enum(["click", "listen", "type", "key", "select", "scroll", "hover", "navigate", "capture", "goback", "goforward", "reload", "wait", "screenshot", "rightclick", "doubleclick", "newtab", "switchtab", "closetab"]),
   selector: z.string().optional(),
   waitMs: z.number().optional(),
   waitForPopupClose: z.boolean().optional(),
@@ -93,6 +96,7 @@ const stepSchema = z.object({
   url: z.string().optional(),
   varName: z.string().optional(),
   incognito: z.boolean().optional(),
+  tabIndex: z.number().optional(),
 });
 
 type Step = z.infer<typeof stepSchema>;
@@ -159,6 +163,9 @@ const defaults: Record<StepType, Partial<Step>> = {
   reload:      { type: "reload",      waitMs: 1500 },
   wait:        { type: "wait",        waitMs: 2000 },
   screenshot:  { type: "screenshot",  waitMs: 800 },
+  newtab:      { type: "newtab",      url: "", waitMs: 1500 },
+  switchtab:   { type: "switchtab",   tabIndex: 0, waitMs: 500 },
+  closetab:    { type: "closetab",    waitMs: 500 },
   type:        { type: "type",        selector: "", text: "" },
   key:         { type: "key",         key: "Enter", waitMs: 500 },
   select:      { type: "select",      selector: "", value: "" },
@@ -612,7 +619,7 @@ export default function Home() {
                     <Play className="h-4 w-4 text-primary" />操作步骤
                     {stepFields.length > 0 && <Badge variant="secondary" className="font-mono">{stepFields.length}</Badge>}
                   </CardTitle>
-                  <CardDescription className="text-xs">按顺序执行，共 16 种操作：点击、双击、右键、输入、按键、下拉、滚动、悬停、跳转、后退、前进、刷新、等待、监听、读取、截图</CardDescription>
+                  <CardDescription className="text-xs">按顺序执行，共 19 种操作：点击、双击、右键、输入、按键、下拉、滚动、悬停、跳转、新建标签、切换标签、关闭标签、后退、前进、刷新、等待、监听、读取、截图</CardDescription>
                 </CardHeader>
                 <CardContent className="space-y-2">
                   {stepFields.length === 0 && (
@@ -877,6 +884,44 @@ export default function Home() {
                               在此处暂停并截图，截图会在右侧实时监控画面中显示。适合用于关键节点确认。
                             </p>
                             <Field label="截图前等待（毫秒）">
+                              <Input type="number" className="font-mono text-xs h-7"
+                                {...form.register(`steps.${index}.waitMs`, { valueAsNumber: true })} />
+                            </Field>
+                          </>}
+
+                          {s?.type === "newtab" && <>
+                            <p className="text-xs text-muted-foreground bg-indigo-50 border border-indigo-200 rounded px-2 py-1.5">
+                              在同一浏览器会话内开一个新标签页。后续步骤会在新标签页内执行。可用"切换标签页"在多个标签间自由跳转。
+                            </p>
+                            <Field label="新标签页打开的网址（可留空）">
+                              <Input placeholder="https://example.com" className="font-mono text-xs h-7"
+                                {...form.register(`steps.${index}.url`)} />
+                            </Field>
+                            <Field label="加载后等待（毫秒）">
+                              <Input type="number" className="font-mono text-xs h-7"
+                                {...form.register(`steps.${index}.waitMs`, { valueAsNumber: true })} />
+                            </Field>
+                          </>}
+
+                          {s?.type === "switchtab" && <>
+                            <p className="text-xs text-muted-foreground bg-sky-50 border border-sky-200 rounded px-2 py-1.5">
+                              切换到指定编号的标签页。编号从 0 开始：0 = 第一个（最初打开的），1 = 第二个，以此类推。
+                            </p>
+                            <Field label="切换到标签页编号（0 = 第一个）">
+                              <Input type="number" min={0} className="font-mono text-xs h-7"
+                                {...form.register(`steps.${index}.tabIndex`, { valueAsNumber: true })} />
+                            </Field>
+                            <Field label="切换后等待（毫秒）">
+                              <Input type="number" className="font-mono text-xs h-7"
+                                {...form.register(`steps.${index}.waitMs`, { valueAsNumber: true })} />
+                            </Field>
+                          </>}
+
+                          {s?.type === "closetab" && <>
+                            <p className="text-xs text-muted-foreground bg-rose-50 border border-rose-200 rounded px-2 py-1.5">
+                              关闭当前激活的标签页，并自动切换回上一个标签。
+                            </p>
+                            <Field label="关闭后等待（毫秒）">
                               <Input type="number" className="font-mono text-xs h-7"
                                 {...form.register(`steps.${index}.waitMs`, { valueAsNumber: true })} />
                             </Field>
@@ -1300,7 +1345,7 @@ export default function Home() {
               <h3 className="text-lg font-medium text-foreground mb-2">搭好步骤，一键执行</h3>
               <p className="text-sm max-w-sm mb-6">点击"添加步骤"，选择要执行的操作类型，排好顺序，保存为方案，支持循环自动运行。</p>
               <div className="flex items-center gap-4 text-xs font-mono opacity-50">
-                <div className="flex items-center gap-1"><CheckCircle2 className="h-3 w-3" />16 种操作类型</div>
+                <div className="flex items-center gap-1"><CheckCircle2 className="h-3 w-3" />19 种操作类型</div>
                 <div className="flex items-center gap-1"><CheckCircle2 className="h-3 w-3" />保存复用</div>
                 <div className="flex items-center gap-1"><CheckCircle2 className="h-3 w-3" />支持循环</div>
               </div>

@@ -13,7 +13,7 @@ const CustomSelectorSchema = z.object({
 });
 
 const ScrapeStepSchema = z.object({
-  type: z.enum(["click", "listen", "type", "key", "select", "scroll", "hover", "navigate", "capture", "goback", "goforward", "reload", "wait", "screenshot", "rightclick", "doubleclick"]),
+  type: z.enum(["click", "listen", "type", "key", "select", "scroll", "hover", "navigate", "capture", "goback", "goforward", "reload", "wait", "screenshot", "rightclick", "doubleclick", "newtab", "switchtab", "closetab"]),
   selector: z.string().optional(),
   waitMs: z.number().optional(),
   waitForPopupClose: z.boolean().optional(),
@@ -26,6 +26,7 @@ const ScrapeStepSchema = z.object({
   url: z.string().optional(),
   varName: z.string().optional(),
   incognito: z.boolean().optional(),
+  tabIndex: z.number().optional(),
 });
 
 const ScrapeOptionsSchema = z.object({
@@ -106,6 +107,14 @@ async function runScrapeSession(
     let ctx = await newCtx();
     let page = await ctx.newPage();
 
+    // Track all open tabs so steps can switch between them
+    const tabs: import("playwright-core").Page[] = [page];
+
+    const setActivePage = (p: import("playwright-core").Page) => {
+      page = p;
+      if (watchId && watchSessions.has(watchId)) watchSessions.get(watchId)!.page = p;
+    };
+
     // Register page so the live-watch SSE stream can grab screenshots
     if (watchId && watchSessions.has(watchId)) {
       watchSessions.get(watchId)!.page = page;
@@ -183,8 +192,9 @@ async function runScrapeSession(
         if (step.incognito !== false) {
           await ctx.close();
           ctx = await newCtx();
-          page = await ctx.newPage();
-          if (watchId && watchSessions.has(watchId)) watchSessions.get(watchId)!.page = page;
+          const newPage = await ctx.newPage();
+          tabs.length = 0; tabs.push(newPage);
+          setActivePage(newPage);
         }
         await page.goto(targetUrl, { waitUntil: "domcontentloaded", timeout: 20000 });
         await page.waitForTimeout(step.waitMs ?? 1500);
@@ -307,6 +317,45 @@ async function runScrapeSession(
           await page.waitForSelector(selector, { timeout: 8000 });
           await page.dblclick(selector);
           if (step.waitMs) await page.waitForTimeout(step.waitMs);
+        } catch { ok = false; }
+
+      } else if (step.type === "newtab") {
+        // Open a new tab in the same browser context, navigate to URL if provided
+        try {
+          const newTab = await ctx.newPage();
+          tabs.push(newTab);
+          setActivePage(newTab);
+          if (step.url?.trim()) {
+            const targetUrl = resolveVars(step.url.trim());
+            await newTab.goto(targetUrl, { waitUntil: "domcontentloaded", timeout: 20000 });
+            emit({ t: "navigated", url: targetUrl });
+          }
+          await newTab.waitForTimeout(step.waitMs ?? 1500);
+        } catch { ok = false; }
+
+      } else if (step.type === "switchtab") {
+        // Switch active tab by index (0 = first/original tab)
+        const idx = step.tabIndex ?? 0;
+        if (idx >= 0 && idx < tabs.length && !tabs[idx].isClosed()) {
+          setActivePage(tabs[idx]);
+          await page.bringToFront();
+          await page.waitForTimeout(step.waitMs ?? 500);
+        } else {
+          ok = false;
+        }
+
+      } else if (step.type === "closetab") {
+        // Close current tab and switch to the previous one
+        try {
+          const closedPage = page;
+          const prevIdx = Math.max(0, tabs.indexOf(closedPage) - 1);
+          tabs.splice(tabs.indexOf(closedPage), 1);
+          await closedPage.close();
+          if (tabs.length > 0) {
+            setActivePage(tabs[prevIdx] ?? tabs[tabs.length - 1]);
+            await page.bringToFront();
+          }
+          await page.waitForTimeout(step.waitMs ?? 500);
         } catch { ok = false; }
       }
 
