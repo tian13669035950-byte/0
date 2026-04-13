@@ -85,20 +85,78 @@ const STEALTH_INIT_SCRIPT = `
     };
   }
 
-  // 9. WebGL vendor / renderer strings (headless shows "Google SwiftShader")
+  // 8. WebGL vendor / renderer strings (headless shows "Google SwiftShader")
   const getCtx = HTMLCanvasElement.prototype.getContext;
   HTMLCanvasElement.prototype.getContext = function(type, ...args) {
     const ctx = getCtx.call(this, type, ...args);
     if (ctx && (type === 'webgl' || type === 'webgl2')) {
       const getParam = ctx.getParameter.bind(ctx);
       ctx.getParameter = (p) => {
-        if (p === 37445) return 'Intel Inc.';         // UNMASKED_VENDOR_WEBGL
-        if (p === 37446) return 'Intel Iris OpenGL Engine'; // UNMASKED_RENDERER_WEBGL
+        if (p === 37445) return 'Intel Inc.';
+        if (p === 37446) return 'Intel Iris OpenGL Engine';
         return getParam(p);
       };
     }
     return ctx;
   };
+
+  // 9. platform — headless exposes "Linux x86_64" even when UA says Windows
+  Object.defineProperty(navigator, 'platform', { get: () => 'Win32' });
+
+  // 10. maxTouchPoints — Windows desktop = 0; headless sometimes returns 0 already but make it explicit
+  Object.defineProperty(navigator, 'maxTouchPoints', { get: () => 0 });
+
+  // 11. User-Agent Client Hints (navigator.userAgentData) — must match UA string
+  if (!navigator.userAgentData) {
+    const brands = [
+      { brand: 'Not)A;Brand', version: '99' },
+      { brand: 'Google Chrome', version: '138' },
+      { brand: 'Chromium',     version: '138' },
+    ];
+    const uaDataObj = {
+      brands,
+      mobile: false,
+      platform: 'Windows',
+      getHighEntropyValues: async () => ({
+        brands,
+        mobile: false,
+        platform: 'Windows',
+        platformVersion: '10.0.0',
+        architecture: 'x86',
+        bitness: '64',
+        model: '',
+        uaFullVersion: '138.0.0.0',
+        fullVersionList: [
+          { brand: 'Not)A;Brand', version: '99.0.0.0' },
+          { brand: 'Google Chrome', version: '138.0.0.0' },
+          { brand: 'Chromium',     version: '138.0.0.0' },
+        ],
+      }),
+      toJSON: () => ({ brands, mobile: false, platform: 'Windows' }),
+    };
+    Object.defineProperty(navigator, 'userAgentData', { get: () => uaDataObj });
+  }
+
+  // 12. outerWidth / outerHeight — both are 0 in headless; real browsers add toolbar height
+  try {
+    if (window.outerWidth === 0) {
+      Object.defineProperty(window, 'outerWidth',  { get: () => window.innerWidth });
+      Object.defineProperty(window, 'outerHeight', { get: () => window.innerHeight + 88 });
+    }
+  } catch (_) {}
+
+  // 13. document.hasFocus — some bot-checks verify the page is "active"
+  try { document.hasFocus = () => true; } catch (_) {}
+
+  // 14. screen dimensions — should be larger than viewport, not exactly equal
+  try {
+    if (window.screen.width === window.innerWidth) {
+      Object.defineProperty(window.screen, 'width',       { get: () => 1920 });
+      Object.defineProperty(window.screen, 'height',      { get: () => 1080 });
+      Object.defineProperty(window.screen, 'availWidth',  { get: () => 1920 });
+      Object.defineProperty(window.screen, 'availHeight', { get: () => 1040 });
+    }
+  } catch (_) {}
 })();
 `;
 
