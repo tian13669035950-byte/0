@@ -1,11 +1,12 @@
 import { Router } from "express";
-import { spawn, execSync } from "child_process";
 import path from "path";
 import fs from "fs";
+import { createRequire } from "module";
 
 const router = Router();
+const _require = createRequire(import.meta.url);
 
-// Resolve to workspace root (api-server is at artifacts/api-server, so go up two levels)
+// Resolve to workspace root (api-server is at artifacts/api-server, go up two levels)
 const ROOT = path.resolve(process.cwd(), "../..");
 
 const SOURCE_PATHS = [
@@ -28,31 +29,54 @@ const SOURCE_PATHS = [
   "README.md",
 ];
 
+// Pre-filled .env template — uses Microsoft Edge which ships with Windows 10/11
+const ENV_TEMPLATE = `# ── 必填：会话加密密钥，随机字符串即可，越长越好 ───────────────────────────────
+SESSION_SECRET=请替换成你自己的随机字符串至少32位
+
+# ── 浏览器路径（以下三行选一个取消注释） ─────────────────────────────────────────
+
+# Microsoft Edge（Windows 10/11 自带，推荐）
+CHROMIUM_PATH=C:\\Program Files (x86)\\Microsoft\\Edge\\Application\\msedge.exe
+
+# Google Chrome
+# CHROMIUM_PATH=C:\\Program Files\\Google\\Chrome\\Application\\chrome.exe
+
+# Linux / macOS（服务器部署时用）
+# CHROMIUM_PATH=/usr/bin/chromium-browser
+`;
+
 router.get("/download-source", (req, res) => {
-  res.setHeader("Content-Type", "application/x-gzip");
-  res.setHeader("Content-Disposition", 'attachment; filename="scraper-tool.tar.gz"');
+  // eslint-disable-next-line @typescript-eslint/no-explicit-any
+  const archiver = _require("archiver") as any;
 
-  // Only include paths that actually exist
-  const existingPaths = SOURCE_PATHS.filter((p) => fs.existsSync(path.join(ROOT, p)));
+  res.setHeader("Content-Type", "application/zip");
+  res.setHeader("Content-Disposition", 'attachment; filename="scraper-tool.zip"');
 
-  const tar = spawn("tar", ["czf", "-", "-C", ROOT, ...existingPaths], {
-    stdio: ["ignore", "pipe", "pipe"],
-  });
+  const archive = archiver("zip", { zlib: { level: 6 } });
 
-  tar.stdout.pipe(res);
-
-  tar.stderr.on("data", (d: Buffer) => console.error("[download]", d.toString().trim()));
-
-  tar.on("error", (err: Error) => {
-    console.error("[download] spawn error:", err);
+  archive.on("error", (err: Error) => {
+    console.error("[download] archiver error:", err);
     if (!res.headersSent) res.status(500).end("打包失败");
   });
 
-  tar.on("close", (code: number) => {
-    if (code !== 0) console.warn("[download] tar exited with code", code);
-  });
+  archive.pipe(res);
 
-  req.on("close", () => tar.kill());
+  // Add all source paths that exist
+  for (const relPath of SOURCE_PATHS) {
+    const absPath = path.join(ROOT, relPath);
+    if (!fs.existsSync(absPath)) continue;
+    const stat = fs.statSync(absPath);
+    if (stat.isDirectory()) {
+      archive.directory(absPath, relPath);
+    } else {
+      archive.file(absPath, { name: relPath });
+    }
+  }
+
+  // Add pre-filled .env template into the zip root
+  archive.append(ENV_TEMPLATE, { name: ".env" });
+
+  archive.finalize();
 });
 
 export default router;

@@ -56,7 +56,7 @@ export function Layout({ children }: { children: ReactNode }) {
           </nav>
           <a
             href="/api/download-source"
-            download="scraper-tool.tar.gz"
+            download="scraper-tool.zip"
             title="下载源码（含安装说明书）"
             className="flex items-center gap-1.5 px-2.5 py-1.5 rounded-md text-xs text-foreground/60 hover:text-foreground hover:bg-muted transition-colors shrink-0"
           >
