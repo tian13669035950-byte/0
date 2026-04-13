@@ -65,6 +65,7 @@ export default function Parallel() {
   const [trackStates, setTrackStates] = useState<TrackState[]>([]);
   const abortRef = useRef<AbortController | null>(null);
   const watchEsRefs = useRef<Map<number, EventSource>>(new Map());
+  const closeWatchTimerRef = useRef<ReturnType<typeof setTimeout> | null>(null);
 
   // ── Loop state ──────────────────────────────────────────────────────────────
   const [loopEnabled, setLoopEnabled] = useState(false);
@@ -185,7 +186,10 @@ export default function Parallel() {
     } finally {
       setRunning(false);
       abortRef.current = null;
-      setTimeout(() => closeAllWatch(), 3000);
+      // Cancel any pending close-watch timer from a previous run, then schedule a new one.
+      // This prevents a previous timer from closing watch windows opened by the next loop iteration.
+      if (closeWatchTimerRef.current) clearTimeout(closeWatchTimerRef.current);
+      closeWatchTimerRef.current = setTimeout(() => closeAllWatch(), 3000);
     }
     return succeeded;
   }, [tracks, sequences, proxyUrl, headedMode, toast, openWatch, closeAllWatch]);
@@ -211,7 +215,9 @@ export default function Parallel() {
       if (succeeded) ok++; else fail++;
       if (i < loopCount - 1 && !stopLoopRef.current) {
         const remaining = loopDelayMs - (Date.now() - cycleStart);
-        if (remaining > 0) await sleep(remaining);
+        // Always wait at least 300ms so React state from the previous run
+        // settles before the next executeOnce() begins.
+        await sleep(Math.max(300, remaining));
       }
     }
     setLoopRunning(false);
@@ -222,7 +228,13 @@ export default function Parallel() {
     });
   }, [executeOnce, loopCount, loopDelayMs, toast]);
 
-  const cancel = () => { stopLoopRef.current = true; abortRef.current?.abort(); };
+  const cancel = () => {
+    stopLoopRef.current = true;
+    abortRef.current?.abort();
+    // Close watch windows immediately instead of waiting for the 3-second timer
+    if (closeWatchTimerRef.current) clearTimeout(closeWatchTimerRef.current);
+    closeAllWatch();
+  };
   const isRunning = running || loopRunning;
 
   // ── Preset management ────────────────────────────────────────────────────────
@@ -319,7 +331,7 @@ export default function Parallel() {
                       <span className="font-medium text-sm">{preset.name}</span>
                       <span className="text-xs text-muted-foreground ml-2">
                         {preset.tracks.length} 条轨道
-                        {preset.loopEnabled ? ` · 循环 ${preset.loopCount} 次` : ""}
+                        {preset.loopEnabled ? ` · 循环 ${preset.loopCount} 次 / ${Math.round((preset.loopDelayMs ?? 0) / 1000)}s` : ""}
                         {" · "}{new Date(preset.savedAt).toLocaleDateString("zh-CN")}
                       </span>
                     </div>
@@ -486,7 +498,7 @@ export default function Parallel() {
           {/* Loop settings */}
           <Card className={`mb-4 border-border/50 transition-all ${loopEnabled ? "border-violet-300 bg-violet-50/30" : ""}`}>
             <CardContent className="py-3 px-4">
-              <div className="flex items-center gap-3 flex-wrap">
+              <div className="flex items-center gap-5 flex-wrap">
                 <label className="flex items-center gap-2 cursor-pointer select-none">
                   <div
                     className={`relative w-9 h-5 rounded-full transition-colors ${loopEnabled ? "bg-violet-500" : "bg-muted"}`}
@@ -500,13 +512,20 @@ export default function Parallel() {
                 </label>
                 {loopEnabled && (
                   <>
-                    <div className="flex items-center gap-1.5">
+                    <div className="flex items-center gap-2">
                       <span className="text-xs text-muted-foreground whitespace-nowrap">循环次数</span>
-                      <Input type="number" min={1} max={999} value={loopCount} onChange={e => setLoopCount(Math.max(1, Number(e.target.value)))} className="w-20 h-7 text-xs text-center" />
+                      <Input type="number" min={1} max={999} value={loopCount} onChange={e => setLoopCount(Math.max(1, Number(e.target.value)))} className="w-20 h-8 text-sm text-center" />
+                      <span className="text-xs text-muted-foreground">次</span>
                     </div>
-                    <div className="flex items-center gap-1.5">
-                      <span className="text-xs text-muted-foreground whitespace-nowrap">固定间隔(ms)</span>
-                      <Input type="number" min={0} step={500} value={loopDelayMs} onChange={e => setLoopDelayMs(Math.max(0, Number(e.target.value)))} className="w-24 h-7 text-xs text-center" />
+                    <div className="flex items-center gap-2">
+                      <span className="text-xs text-muted-foreground whitespace-nowrap">固定间隔</span>
+                      <Input
+                        type="number" min={0} step={1}
+                        value={Math.round(loopDelayMs / 1000)}
+                        onChange={e => setLoopDelayMs(Math.max(0, Number(e.target.value)) * 1000)}
+                        className="w-20 h-8 text-sm text-center"
+                      />
+                      <span className="text-xs text-muted-foreground">秒</span>
                     </div>
                   </>
                 )}
