@@ -1,6 +1,6 @@
 # ScraperTool — 网页自动化抓取工具
 
-> 支持可视化录制、19 种操作步骤、实时流式执行、循环采集、代理和有头浏览器模式。
+> 支持可视化录制、20 种操作步骤、实时流式执行、循环采集、代理和有头浏览器模式、并行多轨执行与跨轨变量共享。
 
 ---
 
@@ -8,13 +8,14 @@
 
 1. [环境要求](#环境要求)
 2. [快速开始](#快速开始)
-3. [环境变量配置](#环境变量配置)
-4. [Chromium 路径配置](#chromium-路径配置)
-5. [启动服务](#启动服务)
-6. [代理配置](#代理配置)
-7. [有头模式（本地代理用户看这里）](#有头模式本地代理用户看这里)
-8. [功能概览](#功能概览)
-9. [部署到服务器](#部署到服务器)
+3. [Windows 本地运行](#windows-本地运行)
+4. [环境变量配置](#环境变量配置)
+5. [Chromium 路径配置](#chromium-路径配置)
+6. [启动服务](#启动服务)
+7. [代理配置](#代理配置)
+8. [有头模式（本地代理用户看这里）](#有头模式本地代理用户看这里)
+9. [功能概览](#功能概览)
+10. [部署到服务器](#部署到服务器)
 
 ---
 
@@ -77,6 +78,59 @@ pnpm run dev
 ```
 
 浏览器打开 `http://localhost:25879`（前端）即可使用。
+
+---
+
+## Windows 本地运行
+
+### 前置准备
+
+1. 安装 [Node.js 20 LTS](https://nodejs.org/)（安装时勾选「Add to PATH」）
+2. 安装 pnpm：
+   ```powershell
+   npm install -g pnpm
+   ```
+3. 用 **7-Zip** 解压 `.tar.gz` 源码包（Windows 自带的解压工具可能不支持）：
+   ```powershell
+   # 如果已安装 Git for Windows，可以用 Git Bash 解压：
+   tar xzf scraper-tool.tar.gz
+   ```
+
+### 配置 `.env`
+
+在项目根目录（`pnpm-workspace.yaml` 所在位置）新建 `.env` 文件，内容如下：
+
+```env
+SESSION_SECRET=随机字符串至少32位
+CHROMIUM_PATH=C:\Program Files\Google\Chrome\Application\chrome.exe
+```
+
+> 常见路径：
+> - Chrome：`C:\Program Files\Google\Chrome\Application\chrome.exe`
+> - Edge：`C:\Program Files (x86)\Microsoft\Edge\Application\msedge.exe`
+> - Chromium：`C:\Program Files\Chromium\Application\chrome.exe`
+
+### 安装依赖
+
+```powershell
+pnpm install
+```
+
+### 启动服务（PowerShell，需开两个窗口）
+
+**窗口 1 — 后端（端口 8080）：**
+```powershell
+pnpm --filter @workspace/api-server run dev
+```
+
+**窗口 2 — 前端（端口 25879）：**
+```powershell
+pnpm --filter @workspace/scraper-tool run dev
+```
+
+浏览器打开 `http://localhost:25879` 即可。
+
+> **有头模式在 Windows 上**：会直接弹出真实浏览器窗口，不需要 Xvfb，可以正常使用。
 
 ---
 
@@ -208,7 +262,7 @@ return chromium.launch({ headless: false, executablePath: CHROMIUM_PATH, args: L
 
 ## 功能概览
 
-### 19 种操作步骤
+### 20 种操作步骤
 
 | 步骤类型 | 说明 |
 |---------|------|
@@ -216,21 +270,22 @@ return chromium.launch({ headless: false, executablePath: CHROMIUM_PATH, args: L
 | doubleclick | 双击元素 |
 | rightclick | 右键点击 |
 | hover | 鼠标悬停 |
-| type | 输入文本（支持变量插值） |
+| type | 输入文本（支持变量插值 `${变量名}`） |
 | key | 按键（如 Enter、Tab） |
 | select | 下拉选择 |
 | scroll | 滚动到元素 |
-| navigate | 跳转到指定 URL |
+| navigate | 跳转到指定 URL（支持变量插值） |
 | goback | 浏览器后退 |
 | goforward | 浏览器前进 |
 | reload | 刷新页面 |
 | wait | 等待（毫秒） |
 | screenshot | 截图 |
-| capture | 读取元素内容（可存入变量） |
-| listen | 监听网络请求（可存入变量） |
+| capture | 读取元素内容并保存为变量 |
+| listen | 等待元素出现/消失或网络空闲 |
 | newtab | 新建标签页 |
 | switchtab | 切换标签页 |
 | closetab | 关闭标签页 |
+| waitforvar | **并行专用**：等待另一轨道的 capture 步骤写入某个变量后继续 |
 
 ### 变量系统
 
