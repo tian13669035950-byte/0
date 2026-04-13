@@ -5,6 +5,8 @@ import { z } from "zod";
 
 const router = Router();
 
+// ─── Schemas ──────────────────────────────────────────────────────────────────
+
 const CustomSelectorSchema = z.object({
   name: z.string(),
   selector: z.string(),
@@ -45,6 +47,18 @@ const ScrapeRequestSchema = z.object({
   options: ScrapeOptionsSchema,
 });
 
+// ─── Types ────────────────────────────────────────────────────────────────────
+
+type ScrapeOptions = z.infer<typeof ScrapeOptionsSchema>;
+
+export type StreamEvent =
+  | { t: "step_start"; i: number; stepType: string }
+  | { t: "step_done"; i: number; ok: boolean }
+  | { t: "captured"; varName: string; value: string }
+  | { t: "navigated"; url: string }
+  | { t: "result"; [key: string]: unknown }
+  | { t: "error"; message: string };
+
 interface ScrapeHistoryItem {
   id: string;
   url: string;
@@ -52,65 +66,68 @@ interface ScrapeHistoryItem {
   scrapedAt: string;
   duration: number;
   itemCount: number;
+  capturedVars?: Record<string, string>;
+  customResults?: { name: string; selector: string; values: string[] }[];
 }
 
 const history: ScrapeHistoryItem[] = [];
 
-router.post("/scrape", async (req, res) => {
-  const parsed = ScrapeRequestSchema.safeParse(req.body);
-  if (!parsed.success) {
-    res.status(400).json({ error: "bad_request", message: "Invalid request body" });
-    return;
-  }
+const CHROMIUM_PATH =
+  process.env.CHROMIUM_PATH ||
+  "/nix/store/qa9cnw4v5xkxyip6mb9kxqfq1z4x2dx1-chromium-138.0.7204.100/bin/chromium";
 
-  const { url, options } = parsed.data;
+const UA =
+  "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/120.0.0.0 Safari/537.36";
+
+// ─── Core session runner ──────────────────────────────────────────────────────
+// `emit` is called with streaming events as execution progresses.
+// For non-streaming callers, pass `() => {}`.
+
+async function runScrapeSession(
+  url: string,
+  options: ScrapeOptions,
+  emit: (event: StreamEvent) => void
+) {
   const startTime = Date.now();
-  let browser;
+  const browser = await chromium.launch({
+    headless: true,
+    executablePath: CHROMIUM_PATH,
+    args: ["--no-sandbox", "--disable-setuid-sandbox", "--disable-dev-shm-usage"],
+  });
 
   try {
-    const executablePath = process.env.CHROMIUM_PATH ||
-      "/nix/store/qa9cnw4v5xkxyip6mb9kxqfq1z4x2dx1-chromium-138.0.7204.100/bin/chromium";
-
-    browser = await chromium.launch({
-      headless: true,
-      executablePath,
-      args: ["--no-sandbox", "--disable-setuid-sandbox", "--disable-dev-shm-usage"],
-    });
-
-    const UA = "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/120.0.0.0 Safari/537.36";
-
-    // Helper: open a fresh browser context (optionally incognito = new isolated context)
-    const newContext = () => browser!.newContext({ userAgent: UA });
-
-    let ctx = await newContext();
+    const newCtx = () => browser.newContext({ userAgent: UA });
+    let ctx = await newCtx();
     let page = await ctx.newPage();
 
     await page.goto(url, { waitUntil: "domcontentloaded", timeout: 20000 });
     await page.waitForTimeout(1500);
 
     let clickedElement: string | undefined;
-    // Captured variables: populated by "capture" steps, consumed by "type" steps via ${varName}
     const vars: Record<string, string> = {};
 
-    // Resolve ${varName} placeholders in a string
-    const resolveVars = (str: string): string =>
-      str.replace(/\$\{([^}]+)\}/g, (_, name) => vars[name.trim()] ?? "");
+    const resolveVars = (str: string) =>
+      str.replace(/\$\{([^}]+)\}/g, (_, n) => vars[n.trim()] ?? "");
 
-    // Build the effective step list: prefer `steps` array; fall back to legacy clickSelector
-    const effectiveSteps = options.steps && options.steps.length > 0
-      ? options.steps
-      : options.clickSelector && options.clickSelector.trim()
-        ? [{
-            type: "click" as const,
-            selector: options.clickSelector.trim(),
-            waitMs: options.clickWaitMs ?? 2000,
-            waitForPopupClose: options.waitForPopupClose,
-            popupTimeoutMs: options.popupTimeoutMs,
-          }]
+    const effectiveSteps =
+      options.steps && options.steps.length > 0
+        ? options.steps
+        : options.clickSelector?.trim()
+        ? [
+            {
+              type: "click" as const,
+              selector: options.clickSelector.trim(),
+              waitMs: options.clickWaitMs ?? 2000,
+              waitForPopupClose: options.waitForPopupClose,
+              popupTimeoutMs: options.popupTimeoutMs,
+            },
+          ]
         : [];
 
-    for (const step of effectiveSteps) {
-      req.log.info({ type: step.type }, "Executing step");
+    for (let i = 0; i < effectiveSteps.length; i++) {
+      const step = effectiveSteps[i];
+      emit({ t: "step_start", i, stepType: step.type });
+      let ok = true;
 
       if (step.type === "listen") {
         const timeout = step.listenTimeout ?? 15000;
@@ -120,15 +137,13 @@ router.post("/scrape", async (req, res) => {
             await page.waitForLoadState("networkidle", { timeout });
           } else if (step.selector?.trim()) {
             const sel = step.selector.trim();
-            if (condition === "appear") {
-              await page.waitForSelector(sel, { state: "visible", timeout });
-            } else if (condition === "disappear") {
-              await page.waitForSelector(sel, { state: "hidden", timeout });
-            }
+            await page.waitForSelector(sel, {
+              state: condition === "appear" ? "visible" : "hidden",
+              timeout,
+            });
           }
-          req.log.info({ condition, selector: step.selector }, "Listen condition met");
         } catch {
-          req.log.warn({ condition, selector: step.selector }, "Listen timed out, continuing");
+          ok = false;
         }
         if (step.waitMs) await page.waitForTimeout(step.waitMs);
 
@@ -143,39 +158,30 @@ router.post("/scrape", async (req, res) => {
             clickedElement = selector;
             try {
               const popup = await popupPromise;
-              req.log.info({ url: popup.url() }, "Popup detected, waiting for close");
               await popup.waitForEvent("close", { timeout: popupTimeout });
-              req.log.info("Popup closed");
-            } catch {
-              req.log.warn("Popup wait timed out");
-            }
+            } catch { ok = false; }
           } else {
             await page.click(selector);
             clickedElement = selector;
           }
           if (step.waitMs) await page.waitForTimeout(step.waitMs);
-        } catch {
-          req.log.warn({ selector }, "Click step: element not found");
-        }
+        } catch { ok = false; }
 
       } else if (step.type === "navigate" && step.url?.trim()) {
         const targetUrl = resolveVars(step.url.trim());
-        const useIncognito = step.incognito !== false; // default true
-        req.log.info({ url: targetUrl, incognito: useIncognito }, "Navigating to new URL");
-        if (useIncognito) {
-          // Close current context and open a brand-new isolated one (no cookies/storage from before)
+        if (step.incognito !== false) {
           await ctx.close();
-          ctx = await newContext();
+          ctx = await newCtx();
           page = await ctx.newPage();
         }
         await page.goto(targetUrl, { waitUntil: "domcontentloaded", timeout: 20000 });
         await page.waitForTimeout(step.waitMs ?? 1500);
+        emit({ t: "navigated", url: targetUrl });
 
       } else if (step.type === "capture" && step.selector?.trim() && step.varName?.trim()) {
         const selector = step.selector.trim();
         const varName = step.varName.trim();
         try {
-          // Check main page first, then iframes
           let captured = await page.evaluate((sel) => {
             const el = document.querySelector(sel);
             if (!el) return null;
@@ -202,30 +208,23 @@ router.post("/scrape", async (req, res) => {
 
           if (captured) {
             vars[varName] = captured;
-            req.log.info({ selector, varName, value: captured }, "Captured variable");
+            emit({ t: "captured", varName, value: captured });
           } else {
-            req.log.warn({ selector, varName }, "Capture: element not found");
+            ok = false;
           }
           if (step.waitMs) await page.waitForTimeout(step.waitMs);
-        } catch {
-          req.log.warn({ selector }, "Capture step failed");
-        }
+        } catch { ok = false; }
 
       } else if (step.type === "type" && step.selector?.trim() && step.text) {
         const selector = step.selector.trim();
-        const resolvedText = resolveVars(step.text);
         try {
           await page.waitForSelector(selector, { timeout: 8000 });
-          await page.fill(selector, resolvedText);
-          req.log.info({ selector, text: resolvedText }, "Typed text");
+          await page.fill(selector, resolveVars(step.text));
           if (step.waitMs) await page.waitForTimeout(step.waitMs);
-        } catch {
-          req.log.warn({ selector }, "Type step: element not found");
-        }
+        } catch { ok = false; }
 
       } else if (step.type === "key" && step.key) {
         await page.keyboard.press(step.key);
-        req.log.info({ key: step.key }, "Pressed key");
         if (step.waitMs) await page.waitForTimeout(step.waitMs);
 
       } else if (step.type === "select" && step.selector?.trim() && step.value) {
@@ -235,24 +234,16 @@ router.post("/scrape", async (req, res) => {
           await page.selectOption(selector, { label: step.value }).catch(() =>
             page.selectOption(selector, { value: step.value! })
           );
-          req.log.info({ selector, value: step.value }, "Selected option");
           if (step.waitMs) await page.waitForTimeout(step.waitMs);
-        } catch {
-          req.log.warn({ selector }, "Select step: element not found");
-        }
+        } catch { ok = false; }
 
       } else if (step.type === "scroll") {
         if (step.selector?.trim()) {
           try {
-            const el = page.locator(step.selector.trim()).first();
-            await el.scrollIntoViewIfNeeded();
-            req.log.info({ selector: step.selector }, "Scrolled to element");
-          } catch {
-            req.log.warn({ selector: step.selector }, "Scroll: element not found");
-          }
+            await page.locator(step.selector.trim()).first().scrollIntoViewIfNeeded();
+          } catch { ok = false; }
         } else {
           await page.mouse.wheel(0, step.waitMs ?? 300);
-          req.log.info("Scrolled page");
         }
         if (step.waitMs) await page.waitForTimeout(step.waitMs);
 
@@ -261,76 +252,63 @@ router.post("/scrape", async (req, res) => {
         try {
           await page.waitForSelector(selector, { timeout: 8000 });
           await page.hover(selector);
-          req.log.info({ selector }, "Hovered");
           if (step.waitMs) await page.waitForTimeout(step.waitMs);
-        } catch {
-          req.log.warn({ selector }, "Hover: element not found");
-        }
+        } catch { ok = false; }
       }
+
+      emit({ t: "step_done", i, ok });
     }
 
     const title = await page.title();
 
     const headings = options.headings
-      ? await page.evaluate(() => {
-          const els = document.querySelectorAll("h1, h2, h3, h4, h5, h6");
-          return Array.from(els)
+      ? await page.evaluate(() =>
+          Array.from(document.querySelectorAll("h1,h2,h3,h4,h5,h6"))
             .map((el) => ({ level: el.tagName.toLowerCase(), text: el.textContent?.trim() || "" }))
             .filter((h) => h.text.length > 0)
-            .slice(0, 50);
-        })
+            .slice(0, 50)
+        )
       : [];
 
     const links = options.links
-      ? await page.evaluate(() => {
-          const els = document.querySelectorAll("a[href]");
-          return Array.from(els)
-            .map((el) => ({
-              text: el.textContent?.trim() || "",
-              href: (el as HTMLAnchorElement).href || "",
-            }))
+      ? await page.evaluate(() =>
+          Array.from(document.querySelectorAll("a[href]"))
+            .map((el) => ({ text: el.textContent?.trim() || "", href: (el as HTMLAnchorElement).href || "" }))
             .filter((l) => l.text.length > 0 && l.href.startsWith("http"))
-            .slice(0, 50);
-        })
+            .slice(0, 50)
+        )
       : [];
 
     const paragraphs = options.paragraphs
-      ? await page.evaluate(() => {
-          const els = document.querySelectorAll("p");
-          return Array.from(els)
+      ? await page.evaluate(() =>
+          Array.from(document.querySelectorAll("p"))
             .map((el) => el.textContent?.trim() || "")
             .filter((t) => t.length > 20)
-            .slice(0, 30);
-        })
+            .slice(0, 30)
+        )
       : [];
 
     const images = options.images
-      ? await page.evaluate(() => {
-          const els = document.querySelectorAll("img[src]");
-          return Array.from(els)
-            .map((el) => ({
-              src: (el as HTMLImageElement).src || "",
-              alt: (el as HTMLImageElement).alt || "",
-            }))
+      ? await page.evaluate(() =>
+          Array.from(document.querySelectorAll("img[src]"))
+            .map((el) => ({ src: (el as HTMLImageElement).src || "", alt: (el as HTMLImageElement).alt || "" }))
             .filter((img) => img.src.startsWith("http"))
-            .slice(0, 30);
-        })
+            .slice(0, 30)
+        )
       : [];
 
     const metaTags = options.metaTags
-      ? await page.evaluate(() => {
-          const els = document.querySelectorAll("meta[name], meta[property]");
-          return Array.from(els)
+      ? await page.evaluate(() =>
+          Array.from(document.querySelectorAll("meta[name],meta[property]"))
             .map((el) => ({
               name: el.getAttribute("name") || el.getAttribute("property") || "",
               content: el.getAttribute("content") || "",
             }))
             .filter((m) => m.name.length > 0 && m.content.length > 0)
-            .slice(0, 30);
-        })
+            .slice(0, 30)
+        )
       : [];
 
-    // Helper: extract values from a frame (page or iframe)
     async function extractFromFrame(
       frame: import("playwright-core").Frame,
       selector: string
@@ -339,14 +317,8 @@ router.post("/scrape", async (req, res) => {
         const els = document.querySelectorAll(sel);
         return Array.from(els)
           .map((el) => {
-            // For inputs/selects/textareas return their value
-            if (
-              el instanceof HTMLInputElement ||
-              el instanceof HTMLTextAreaElement ||
-              el instanceof HTMLSelectElement
-            ) {
+            if (el instanceof HTMLInputElement || el instanceof HTMLTextAreaElement || el instanceof HTMLSelectElement)
               return el.value?.trim() || el.getAttribute("placeholder")?.trim() || "";
-            }
             return el.textContent?.trim() || "";
           })
           .filter((t) => t.length > 0)
@@ -358,35 +330,18 @@ router.post("/scrape", async (req, res) => {
     if (options.customSelectors && options.customSelectors.length > 0) {
       for (const cs of options.customSelectors) {
         if (!cs.selector.trim()) continue;
-
-        // 1. Try main page first
         let values = await extractFromFrame(page.mainFrame(), cs.selector);
         let foundIn = "main";
-
-        // 2. If not found, search all iframes
         if (values.length === 0) {
           for (const frame of page.frames()) {
             if (frame === page.mainFrame()) continue;
             try {
-              const iframeValues = await extractFromFrame(frame, cs.selector);
-              if (iframeValues.length > 0) {
-                values = iframeValues;
-                foundIn = `iframe(${frame.url()})`;
-                req.log.info({ selector: cs.selector, frame: frame.url() }, "Found selector inside iframe");
-                break;
-              }
-            } catch {
-              // iframe may be cross-origin, skip
-            }
+              const iframeVals = await extractFromFrame(frame, cs.selector);
+              if (iframeVals.length > 0) { values = iframeVals; foundIn = `iframe(${frame.url()})`; break; }
+            } catch { /* cross-origin */ }
           }
         }
-
         customResults.push({ name: cs.name, selector: cs.selector, values });
-        if (values.length === 0) {
-          req.log.warn({ selector: cs.selector }, "Selector not found in main page or any iframe");
-        } else {
-          req.log.info({ selector: cs.selector, foundIn, count: values.length }, "Selector matched");
-        }
       }
     }
 
@@ -395,28 +350,64 @@ router.post("/scrape", async (req, res) => {
     const duration = Date.now() - startTime;
     const id = randomUUID();
     const scrapedAt = new Date().toISOString();
-
     const itemCount =
       headings.length + links.length + paragraphs.length + images.length + metaTags.length +
-      customResults.reduce((sum, r) => sum + r.values.length, 0);
+      customResults.reduce((s, r) => s + r.values.length, 0);
 
     history.unshift({ id, url, title, scrapedAt, duration, itemCount, capturedVars: vars, customResults });
     if (history.length > 50) history.pop();
 
-    res.json({
-      id, url, title, scrapedAt, duration,
-      headings, links, paragraphs, images, metaTags,
-      customResults,
-      clickedElement,
-      capturedVars: vars,
-    });
-  } catch (err: unknown) {
-    if (browser) await browser.close().catch(() => {});
+    return { id, url, title, scrapedAt, duration, headings, links, paragraphs, images, metaTags, customResults, clickedElement, capturedVars: vars };
+  } catch (err) {
+    await browser.close().catch(() => {});
+    throw err;
+  }
+}
+
+// ─── POST /scrape  (regular, waits for full result) ──────────────────────────
+
+router.post("/scrape", async (req, res) => {
+  const parsed = ScrapeRequestSchema.safeParse(req.body);
+  if (!parsed.success) {
+    res.status(400).json({ error: "bad_request", message: "Invalid request body" });
+    return;
+  }
+  try {
+    const result = await runScrapeSession(parsed.data.url, parsed.data.options, () => {});
+    res.json(result);
+  } catch (err) {
     const message = err instanceof Error ? err.message : "Unknown error";
-    req.log.error({ err }, "Scrape failed");
     res.status(500).json({ error: "scrape_failed", message });
   }
 });
+
+// ─── POST /scrape/stream  (NDJSON streaming, real-time step events) ───────────
+
+router.post("/scrape/stream", async (req, res) => {
+  const parsed = ScrapeRequestSchema.safeParse(req.body);
+  if (!parsed.success) {
+    res.status(400).json({ error: "bad_request", message: "Invalid request body" });
+    return;
+  }
+
+  res.setHeader("Content-Type", "application/x-ndjson; charset=utf-8");
+  res.setHeader("Cache-Control", "no-cache");
+  res.setHeader("X-Accel-Buffering", "no"); // Disable nginx buffering
+
+  const write = (event: StreamEvent) => {
+    try { res.write(JSON.stringify(event) + "\n"); } catch { /* client disconnected */ }
+  };
+
+  try {
+    const result = await runScrapeSession(parsed.data.url, parsed.data.options, write);
+    write({ t: "result", ...result });
+  } catch (err) {
+    write({ t: "error", message: err instanceof Error ? err.message : "Unknown error" });
+  }
+  res.end();
+});
+
+// ─── GET /scrape/history ──────────────────────────────────────────────────────
 
 router.get("/scrape/history", (_req, res) => {
   res.json(history);

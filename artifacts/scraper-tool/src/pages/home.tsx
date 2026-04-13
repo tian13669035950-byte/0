@@ -2,7 +2,7 @@ import { useState, useRef, useCallback } from "react";
 import { useForm, useFieldArray } from "react-hook-form";
 import { zodResolver } from "@hookform/resolvers/zod";
 import * as z from "zod";
-import { useStartScrape, useHealthCheck, getHealthCheckQueryKey } from "@workspace/api-client-react";
+import { useHealthCheck, getHealthCheckQueryKey } from "@workspace/api-client-react";
 import { Button } from "@/components/ui/button";
 import { Input } from "@/components/ui/input";
 import { Form, FormControl, FormField, FormItem, FormLabel, FormMessage } from "@/components/ui/form";
@@ -130,6 +130,11 @@ export default function Home() {
   const [addMenuOpen, setAddMenuOpen] = useState(false);
   const stopLoopRef = useRef(false);
   const snapshotIdRef = useRef(0);
+  const [execProgress, setExecProgress] = useState<{
+    activeIdx: number | null;
+    doneMap: Record<number, boolean>;
+    liveVars: Record<string, string>;
+  } | null>(null);
 
   const form = useForm<FormValues>({
     resolver: zodResolver(formSchema),
@@ -146,7 +151,6 @@ export default function Home() {
   const { fields: stepFields, append: appendStep, remove: removeStep, move: moveStep } = useFieldArray({ control: form.control, name: "steps" });
   const { fields: selectorFields, append: appendSelector, remove: removeSelector } = useFieldArray({ control: form.control, name: "customSelectors" });
 
-  const { mutateAsync } = useStartScrape();
   const { data: health } = useHealthCheck({ query: { queryKey: getHealthCheckQueryKey() } });
 
   // ── Save/Load ─────────────────────────────────────────────────────────────
@@ -181,12 +185,59 @@ export default function Home() {
     setSnapshots((p) => [snap, ...p]); setTriggerCount((c) => c + 1);
   }, []);
 
+  // ── Streaming scrape helper ────────────────────────────────────────────────
+  const streamScrape = useCallback(async (
+    payload: { url: string; options: object },
+    onEvent: (e: { t: string; [k: string]: unknown }) => void
+  ): Promise<ScrapeResult> => {
+    const resp = await fetch("/api/scrape/stream", {
+      method: "POST",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify(payload),
+    });
+    if (!resp.ok) throw new Error(`HTTP ${resp.status}`);
+    const reader = resp.body!.getReader();
+    const decoder = new TextDecoder();
+    let buf = "";
+    let result: ScrapeResult | null = null;
+    while (true) {
+      const { done, value } = await reader.read();
+      if (done) break;
+      buf += decoder.decode(value, { stream: true });
+      const lines = buf.split("\n");
+      buf = lines.pop()!;
+      for (const line of lines) {
+        if (!line.trim()) continue;
+        try {
+          const ev = JSON.parse(line);
+          onEvent(ev);
+          if (ev.t === "result") result = ev as unknown as ScrapeResult;
+          if (ev.t === "error") throw new Error(ev.message as string);
+        } catch (parseErr) { if (parseErr instanceof SyntaxError) continue; throw parseErr; }
+      }
+    }
+    if (!result) throw new Error("未收到结果");
+    return result;
+  }, []);
+
   const runSingle = useCallback(async () => {
     setSinglePending(true);
-    try { const d = await mutateAsync({ data: buildRequest(form.getValues()) }); addSnap(d); toast({ title: "执行完成", description: `耗时 ${d.duration}ms` }); }
-    catch (e: unknown) { toast({ title: "执行失败", description: e instanceof Error ? e.message : "未知错误", variant: "destructive" }); }
-    finally { setSinglePending(false); }
-  }, [form, mutateAsync, buildRequest, addSnap, toast]);
+    setExecProgress({ activeIdx: null, doneMap: {}, liveVars: {} });
+    try {
+      const d = await streamScrape(buildRequest(form.getValues()), (ev) => {
+        if (ev.t === "step_start") setExecProgress(p => p && ({ ...p, activeIdx: ev.i as number }));
+        if (ev.t === "step_done") setExecProgress(p => p && ({ ...p, activeIdx: null, doneMap: { ...p.doneMap, [ev.i as number]: ev.ok as boolean } }));
+        if (ev.t === "captured") setExecProgress(p => p && ({ ...p, liveVars: { ...p.liveVars, [ev.varName as string]: ev.value as string } }));
+      });
+      addSnap(d);
+      toast({ title: "执行完成", description: `耗时 ${d.duration}ms` });
+    } catch (e: unknown) {
+      toast({ title: "执行失败", description: e instanceof Error ? e.message : "未知错误", variant: "destructive" });
+    } finally {
+      setSinglePending(false);
+      setTimeout(() => setExecProgress(null), 4000);
+    }
+  }, [form, streamScrape, buildRequest, addSnap, toast]);
 
   const runLoop = useCallback(async () => {
     const v = form.getValues(); const total = v.loopCount; const delay = v.loopDelayMs;
@@ -195,13 +246,24 @@ export default function Home() {
     for (let i = 1; i <= total; i++) {
       if (stopLoopRef.current) break;
       setLoopProgress({ current: i, total });
-      try { const d = await mutateAsync({ data: buildRequest(v) }); addSnap(d, i, total); ok++; }
-      catch (e: unknown) { fail++; toast({ title: `第 ${i} 次失败`, description: e instanceof Error ? e.message : "", variant: "destructive" }); }
+      setExecProgress({ activeIdx: null, doneMap: {}, liveVars: {} });
+      try {
+        const d = await streamScrape(buildRequest(v), (ev) => {
+          if (ev.t === "step_start") setExecProgress(p => p && ({ ...p, activeIdx: ev.i as number }));
+          if (ev.t === "step_done") setExecProgress(p => p && ({ ...p, activeIdx: null, doneMap: { ...p.doneMap, [ev.i as number]: ev.ok as boolean } }));
+          if (ev.t === "captured") setExecProgress(p => p && ({ ...p, liveVars: { ...p.liveVars, [ev.varName as string]: ev.value as string } }));
+        });
+        addSnap(d, i, total); ok++;
+      } catch (e: unknown) {
+        fail++;
+        toast({ title: `第 ${i} 次失败`, description: e instanceof Error ? e.message : "", variant: "destructive" });
+      }
       if (i < total && !stopLoopRef.current) await sleep(delay);
     }
     setLoopRunning(false); setLoopProgress(null);
+    setExecProgress(null);
     toast({ title: stopLoopRef.current ? "循环已停止" : "循环完成", description: `成功 ${ok} 次${fail > 0 ? `，失败 ${fail} 次` : ""}` });
-  }, [form, mutateAsync, buildRequest, addSnap, toast]);
+  }, [form, streamScrape, buildRequest, addSnap, toast]);
 
   const isRunning = loopRunning || singlePending;
   const loopEnabled = form.watch("loopEnabled");
@@ -260,15 +322,40 @@ export default function Home() {
                     const colors = COLOR_MAP[def?.color ?? "blue"];
                     const Icon = def?.icon ?? Play;
 
+                    // Progress circle state for this step
+                    const isActive = execProgress?.activeIdx === index;
+                    const isDone = execProgress && index in execProgress.doneMap;
+                    const doneOk = isDone ? execProgress!.doneMap[index] : null;
+                    const isPending = execProgress && !isActive && !isDone;
+
                     return (
-                      <div key={field.id} className="border rounded-md overflow-hidden">
+                      <div key={field.id} className={`border rounded-md overflow-hidden transition-all ${isActive ? "ring-2 ring-primary/40 shadow-sm" : ""}`}>
                         {/* Step header */}
-                        <div className={`flex items-center gap-2 px-3 py-2 border-b ${colors.bg}`}>
+                        <div className={`flex items-center gap-2 px-3 py-2 border-b ${isActive ? "bg-primary/10" : colors.bg}`}>
                           <div className="flex flex-col gap-0.5 shrink-0">
                             <Button type="button" variant="ghost" size="icon" className="h-4 w-5 p-0" disabled={index === 0} onClick={() => moveStep(index, index - 1)}><ArrowUp className="h-3 w-3" /></Button>
                             <Button type="button" variant="ghost" size="icon" className="h-4 w-5 p-0" disabled={index === stepFields.length - 1} onClick={() => moveStep(index, index + 1)}><ArrowDown className="h-3 w-3" /></Button>
                           </div>
-                          <div className={`w-1.5 h-6 rounded-full shrink-0 ${colors.bar}`} />
+
+                          {/* Progress circle indicator */}
+                          <div className="shrink-0 flex items-center justify-center w-5 h-5">
+                            {isActive ? (
+                              <Loader2 className="h-4 w-4 text-primary animate-spin" />
+                            ) : isDone && doneOk ? (
+                              <div className="h-4 w-4 rounded-full bg-green-500 flex items-center justify-center">
+                                <svg viewBox="0 0 10 10" className="h-2.5 w-2.5 text-white fill-none stroke-white stroke-[1.5]"><polyline points="2,5 4,7.5 8,3" /></svg>
+                              </div>
+                            ) : isDone && !doneOk ? (
+                              <div className="h-4 w-4 rounded-full bg-amber-400 flex items-center justify-center">
+                                <span className="text-white text-[9px] font-bold leading-none">!</span>
+                              </div>
+                            ) : isPending ? (
+                              <div className="h-4 w-4 rounded-full border-2 border-muted-foreground/25" />
+                            ) : (
+                              <div className={`w-1.5 h-5 rounded-full ${colors.bar}`} />
+                            )}
+                          </div>
+
                           <Icon className="h-3.5 w-3.5 shrink-0 text-foreground/60" />
                           <span className="text-xs font-semibold flex-1">步骤 {index + 1}：{def?.label}</span>
                           <Button type="button" variant="ghost" size="icon" className="h-6 w-6 text-muted-foreground hover:text-destructive" onClick={() => removeStep(index)}>
@@ -587,6 +674,26 @@ export default function Home() {
                 </div>
                 <Progress value={(loopProgress.current / loopProgress.total) * 100} className="h-2" />
                 <p className="text-xs text-muted-foreground">点左侧"停止循环"随时中断，已收集数据不会丢失</p>
+              </CardContent>
+            </Card>
+          )}
+
+          {/* Live execution vars — shown during single run or loop */}
+          {execProgress && Object.keys(execProgress.liveVars).length > 0 && (
+            <Card className="border-teal-300 bg-teal-50/60 shadow-sm animate-in fade-in">
+              <CardContent className="pt-3 pb-3">
+                <div className="flex items-center gap-2 mb-2 text-xs font-medium text-teal-700">
+                  <Crosshair className="h-3.5 w-3.5 animate-pulse" />
+                  实时读取到的变量
+                </div>
+                <div className="space-y-1.5">
+                  {Object.entries(execProgress.liveVars).map(([k, v]) => (
+                    <div key={k} className="flex items-center gap-2">
+                      <code className="text-xs font-mono bg-white border border-teal-200 px-1.5 py-0.5 rounded text-teal-600 shrink-0">{k}</code>
+                      <span className="font-mono text-sm font-semibold text-teal-800 break-all">{v}</span>
+                    </div>
+                  ))}
+                </div>
               </CardContent>
             </Card>
           )}
