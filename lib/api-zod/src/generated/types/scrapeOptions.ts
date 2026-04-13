@@ -18,4 +18,8 @@ export interface ScrapeOptions {
   clickSelector?: string;
   /** Milliseconds to wait after clicking */
   clickWaitMs?: number;
+  /** Wait for a popup/background window to open and close before scraping */
+  waitForPopupClose?: boolean;
+  /** Max milliseconds to wait for popup to close */
+  popupTimeoutMs?: number;
 }

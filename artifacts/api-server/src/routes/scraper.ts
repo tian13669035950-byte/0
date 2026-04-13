@@ -19,6 +19,8 @@ const ScrapeOptionsSchema = z.object({
   customSelectors: z.array(CustomSelectorSchema).optional(),
   clickSelector: z.string().optional(),
   clickWaitMs: z.number().optional(),
+  waitForPopupClose: z.boolean().optional(),
+  popupTimeoutMs: z.number().optional(),
 });
 
 const ScrapeRequestSchema = z.object({
@@ -73,10 +75,34 @@ router.post("/scrape", async (req, res) => {
       const selector = options.clickSelector.trim();
       try {
         await page.waitForSelector(selector, { timeout: 5000 });
-        await page.click(selector);
-        clickedElement = selector;
-        const waitMs = options.clickWaitMs ?? 2000;
-        await page.waitForTimeout(waitMs);
+
+        if (options.waitForPopupClose) {
+          // Listen for a new popup/window before clicking
+          const popupTimeout = options.popupTimeoutMs ?? 30000;
+          const popupPromise = page.context().waitForEvent("page", { timeout: popupTimeout });
+          await page.click(selector);
+          clickedElement = selector;
+          try {
+            // Wait for the popup to appear
+            const popup = await popupPromise;
+            req.log.info({ url: popup.url() }, "Popup detected, waiting for it to close");
+            // Wait until the popup is closed (its process ends)
+            await popup.waitForEvent("close", { timeout: popupTimeout });
+            req.log.info("Popup closed, proceeding to scrape main page");
+            // Extra buffer for the main page to reflect updates
+            const waitMs = options.clickWaitMs ?? 2000;
+            await page.waitForTimeout(waitMs);
+          } catch {
+            req.log.warn("Popup did not appear or timed out, falling back to fixed wait");
+            const waitMs = options.clickWaitMs ?? 2000;
+            await page.waitForTimeout(waitMs);
+          }
+        } else {
+          await page.click(selector);
+          clickedElement = selector;
+          const waitMs = options.clickWaitMs ?? 2000;
+          await page.waitForTimeout(waitMs);
+        }
       } catch {
         req.log.warn({ selector }, "clickSelector not found or click failed");
       }

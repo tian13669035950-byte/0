@@ -17,7 +17,7 @@ import {
   Globe, Type, Link as LinkIcon, AlignLeft, Image as ImageIcon, Code,
   Activity, Search, AlertCircle, CheckCircle2, Play, Loader2,
   MousePointerClick, Plus, Trash2, Target, Crosshair, RefreshCw, Clock,
-  TrendingUp, ChevronDown, ChevronUp,
+  TrendingUp, ChevronDown, ChevronUp, ExternalLink,
 } from "lucide-react";
 import type { ScrapeResult } from "@workspace/api-client-react/src/generated/api.schemas";
 
@@ -37,6 +37,8 @@ const formSchema = z.object({
   }),
   clickSelector: z.string().optional(),
   clickWaitMs: z.number().optional(),
+  waitForPopupClose: z.boolean(),
+  popupTimeoutMs: z.number().optional(),
   customSelectors: z.array(customSelectorSchema),
 });
 
@@ -64,6 +66,8 @@ export default function Home() {
       options: { headings: true, links: true, paragraphs: true, images: true, metaTags: true },
       clickSelector: "",
       clickWaitMs: 2000,
+      waitForPopupClose: false,
+      popupTimeoutMs: 30000,
       customSelectors: [],
     },
   });
@@ -101,6 +105,8 @@ export default function Home() {
           ...values.options,
           clickSelector: values.clickSelector || undefined,
           clickWaitMs: values.clickWaitMs,
+          waitForPopupClose: values.waitForPopupClose || undefined,
+          popupTimeoutMs: values.popupTimeoutMs,
           customSelectors: values.customSelectors.length > 0 ? values.customSelectors : undefined,
         },
       },
@@ -186,6 +192,38 @@ export default function Home() {
                       </FormControl>
                     </FormItem>
                   )} />
+
+                  <Separator />
+
+                  <FormField control={form.control} name="waitForPopupClose" render={({ field }) => (
+                    <FormItem className="flex items-start gap-3 rounded border p-3 bg-amber-50/50 border-amber-200/60">
+                      <FormControl>
+                        <Checkbox checked={field.value} onCheckedChange={field.onChange} className="mt-0.5" />
+                      </FormControl>
+                      <div className="space-y-1">
+                        <FormLabel className="font-medium cursor-pointer flex items-center gap-1.5 text-sm m-0">
+                          <ExternalLink className="h-3.5 w-3.5 text-amber-600" />
+                          会弹出后台窗口
+                        </FormLabel>
+                        <p className="text-xs text-muted-foreground leading-relaxed">
+                          勾选后，工具会自动监听弹出的后台窗口，等它自动关闭之后，再抓取主页面的最新数据
+                        </p>
+                      </div>
+                    </FormItem>
+                  )} />
+
+                  {form.watch("waitForPopupClose") && (
+                    <FormField control={form.control} name="popupTimeoutMs" render={({ field }) => (
+                      <FormItem>
+                        <FormLabel className="text-xs text-muted-foreground">等待弹窗关闭的最长时间（毫秒）</FormLabel>
+                        <FormControl>
+                          <Input type="number" placeholder="30000" className="font-mono text-xs" {...field}
+                            onChange={e => field.onChange(Number(e.target.value))} />
+                        </FormControl>
+                        <p className="text-xs text-muted-foreground">默认 30 秒，超时会自动用固定等待时间兜底</p>
+                      </FormItem>
+                    )} />
+                  )}
                 </CardContent>
               </Card>
 

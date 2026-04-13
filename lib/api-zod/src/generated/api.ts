@@ -43,6 +43,16 @@ export const StartScrapeBody = zod.object({
       .number()
       .optional()
       .describe("Milliseconds to wait after clicking"),
+    waitForPopupClose: zod
+      .boolean()
+      .optional()
+      .describe(
+        "Wait for a popup\/background window to open and close before scraping",
+      ),
+    popupTimeoutMs: zod
+      .number()
+      .optional()
+      .describe("Max milliseconds to wait for popup to close"),
   }),
 });
 

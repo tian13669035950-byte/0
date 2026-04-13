@@ -114,6 +114,12 @@ components:
         clickWaitMs:
           type: number
           description: Milliseconds to wait after clicking
+        waitForPopupClose:
+          type: boolean
+          description: Wait for a popup/background window to open and close before scraping
+        popupTimeoutMs:
+          type: number
+          description: Max milliseconds to wait for popup to close
       required:
         - headings
         - links
