@@ -385,6 +385,21 @@ export default function Home() {
     setRecPickedLabel("");
   }, [sessionId]);
 
+  const connectStream = useCallback((sid: string) => {
+    if (esRef.current) { esRef.current.close(); esRef.current = null; }
+    const es = new EventSource(`/api/record/session/${sid}/stream`);
+    esRef.current = es;
+    es.onmessage = (e) => {
+      const data = JSON.parse(e.data) as { type: string; data?: string; url?: string };
+      if (data.type === "screenshot" && data.data) {
+        setScreenshotUrl(`data:image/jpeg;base64,${data.data}`);
+      } else if (data.type === "navigated" && data.url) {
+        setSessionCurrentUrl(data.url);
+      }
+    };
+    es.onerror = () => { es.close(); esRef.current = null; };
+  }, []);
+
   const startRecording = useCallback(async () => {
     const url = form.getValues("url");
     if (!url?.trim() || url === "https://example.com") {
@@ -410,17 +425,7 @@ export default function Home() {
       setSessionLoading(false);
 
       // Open SSE stream for screenshots
-      const es = new EventSource(`/api/record/session/${sid}/stream`);
-      esRef.current = es;
-      es.onmessage = (e) => {
-        const data = JSON.parse(e.data) as { type: string; data?: string; url?: string };
-        if (data.type === "screenshot" && data.data) {
-          setScreenshotUrl(`data:image/jpeg;base64,${data.data}`);
-        } else if (data.type === "navigated" && data.url) {
-          setSessionCurrentUrl(data.url);
-        }
-      };
-      es.onerror = () => { es.close(); esRef.current = null; };
+      connectStream(sid);
     } catch (err) {
       toast({ title: "启动录制失败", description: String(err), variant: "destructive" });
       stopRecording(null);
@@ -1508,6 +1513,10 @@ export default function Home() {
                 <span className="hidden sm:inline">启动浏览器…</span>
               </div>
             )}
+            <Button type="button" variant="ghost" size="sm" className="h-7 w-7 p-0 sm:w-auto sm:px-3 sm:gap-1.5 text-muted-foreground shrink-0"
+              title="重新连接画面" onClick={() => { if (sessionId) connectStream(sessionId); }}>
+              <RefreshCw className="h-4 w-4" /><span className="hidden sm:inline">刷新画面</span>
+            </Button>
             <Button type="button" variant="ghost" size="sm" className="h-7 w-7 p-0 sm:w-auto sm:px-3 sm:gap-1.5 text-muted-foreground shrink-0" onClick={() => stopRecording()}>
               <X className="h-4 w-4" /><span className="hidden sm:inline">关闭</span>
             </Button>
