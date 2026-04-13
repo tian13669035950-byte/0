@@ -104,12 +104,29 @@ async function runScrapeSession(
   proxyRaw?: string,
   headed?: boolean,
   sharedVars?: Record<string, string>,
+  signal?: AbortSignal,
 ) {
   const startTime = Date.now();
   const proxy = parseProxy(proxyRaw);
   const browser = await launchStealthBrowser(headed ?? false);
 
+  // Helper: throw immediately if the client has disconnected / loop was aborted
+  const checkAbort = () => { if (signal?.aborted) throw new Error("Aborted"); };
+
+  // Race any promise against the abort signal so we stop mid-flight
+  const withAbort = <T>(p: Promise<T>): Promise<T> => {
+    if (!signal) return p;
+    return Promise.race([
+      p,
+      new Promise<never>((_, reject) => {
+        if (signal.aborted) { reject(new Error("Aborted")); return; }
+        signal.addEventListener("abort", () => reject(new Error("Aborted")), { once: true });
+      }),
+    ]);
+  };
+
   try {
+    checkAbort();
     const newCtx = () => newStealthContext(browser, proxy ? { proxy } : {});
     let ctx = await newCtx();
     let page = await ctx.newPage();
@@ -127,7 +144,7 @@ async function runScrapeSession(
       watchSessions.get(watchId)!.page = page;
     }
 
-    await page.goto(url, { waitUntil: "domcontentloaded", timeout: 20000 });
+    await withAbort(page.goto(url, { waitUntil: "domcontentloaded", timeout: 20000 }));
     await page.waitForTimeout(1500);
 
     let clickedElement: string | undefined;
@@ -155,6 +172,7 @@ async function runScrapeSession(
         : [];
 
     for (let i = 0; i < effectiveSteps.length; i++) {
+      checkAbort();
       const step = effectiveSteps[i];
       emit({ t: "step_start", i, stepType: step.type });
       let ok = true;
@@ -563,6 +581,10 @@ router.post("/scrape/stream", async (req, res) => {
   res.setHeader("Cache-Control", "no-cache");
   res.setHeader("X-Accel-Buffering", "no");
 
+  // Abort the scrape session as soon as the client disconnects (stop button / browser close)
+  const ac = new AbortController();
+  req.on("close", () => ac.abort());
+
   let lastWriteAt = Date.now();
   const write = (event: StreamEvent) => {
     try { res.write(JSON.stringify(event) + "\n"); lastWriteAt = Date.now(); } catch { /* client disconnected */ }
@@ -581,10 +603,12 @@ router.post("/scrape/stream", async (req, res) => {
   write({ t: "watch_ready", watchId });
 
   try {
-    const result = await runScrapeSession(parsed.data.url, parsed.data.options, write, watchId, parsed.data.proxy, parsed.data.headed);
+    const result = await runScrapeSession(parsed.data.url, parsed.data.options, write, watchId, parsed.data.proxy, parsed.data.headed, undefined, ac.signal);
     write({ t: "result", ...result });
   } catch (err) {
-    write({ t: "error", message: err instanceof Error ? err.message : "Unknown error" });
+    if (err instanceof Error && err.message !== "Aborted") {
+      write({ t: "error", message: err.message });
+    }
   } finally {
     clearInterval(keepalive);
     watchSessions.delete(watchId);
@@ -620,6 +644,10 @@ router.post("/parallel/stream", async (req, res) => {
   res.setHeader("X-Accel-Buffering", "no");
   res.flushHeaders();
 
+  // Abort all track sessions when the client disconnects (stop button / browser close)
+  const ac = new AbortController();
+  req.on("close", () => ac.abort());
+
   const write = (obj: object) => {
     try { res.write(JSON.stringify(obj) + "\n"); } catch { /* client disconnected */ }
   };
@@ -650,10 +678,14 @@ router.post("/parallel/stream", async (req, res) => {
           track.proxy,
           track.headed,
           sharedVars,
+          ac.signal,
         );
         write({ track: idx, t: "result", ...result });
       } catch (err) {
-        write({ track: idx, t: "error", message: err instanceof Error ? err.message : String(err) });
+        // Don't emit an error event for intentional aborts (stop button / timeout)
+        if (err instanceof Error && err.message !== "Aborted") {
+          write({ track: idx, t: "error", message: err.message });
+        }
       } finally {
         watchSessions.delete(watchIds[idx]);
       }
