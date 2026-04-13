@@ -56,12 +56,21 @@ export async function humanType(page: Page, selector: string, text: string) {
   await humanClick(page, selector);
   await page.keyboard.press("Control+a");
   await page.keyboard.press("Delete");
-  await page.waitForTimeout(80 + Math.random() * 80);
+  // Pause after clicking before starting to type (like a human collecting thoughts)
+  await page.waitForTimeout(180 + Math.random() * 220);
   for (const ch of text) {
     await page.keyboard.type(ch);
-    const delay = Math.random() < 0.12
-      ? 200 + Math.random() * 300
-      : 40  + Math.random() * 60;
+    let delay: number;
+    if (Math.random() < 0.08) {
+      // Occasional longer thinking pause (fat-finger hesitation, ~8% of chars)
+      delay = 400 + Math.random() * 500;
+    } else if (ch === " " || ch === "." || ch === "," || ch === "@") {
+      // Brief pause after word boundaries and special chars
+      delay = 150 + Math.random() * 180;
+    } else {
+      // Normal keystroke: 80–220 ms  (~60–70 WPM feel)
+      delay = 80 + Math.random() * 140;
+    }
     await page.waitForTimeout(delay);
   }
 }
