@@ -141,6 +141,7 @@ export default function Home() {
   const [saveName, setSaveName] = useState("");
   const [addMenuOpen, setAddMenuOpen] = useState(false);
   const stopLoopRef = useRef(false);
+  const abortRef = useRef<AbortController | null>(null);
   const snapshotIdRef = useRef(0);
   const [execProgress, setExecProgress] = useState<{
     activeIdx: number | null;
@@ -255,12 +256,14 @@ export default function Home() {
   // ── Streaming scrape helper ────────────────────────────────────────────────
   const streamScrape = useCallback(async (
     payload: { url: string; options: object },
-    onEvent: (e: { t: string; [k: string]: unknown }) => void
+    onEvent: (e: { t: string; [k: string]: unknown }) => void,
+    signal?: AbortSignal,
   ): Promise<ScrapeResult> => {
     const resp = await fetch("/api/scrape/stream", {
       method: "POST",
       headers: { "Content-Type": "application/json" },
       body: JSON.stringify(payload),
+      signal,
     });
     if (!resp.ok) throw new Error(`HTTP ${resp.status}`);
     const reader = resp.body!.getReader();
@@ -443,20 +446,35 @@ export default function Home() {
     if (ev.t === "step_start") setExecProgress(p => p && ({ ...p, activeIdx: ev.i as number }));
     if (ev.t === "step_done") setExecProgress(p => p && ({ ...p, activeIdx: null, doneMap: { ...p.doneMap, [ev.i as number]: ev.ok as boolean } }));
     if (ev.t === "captured") setExecProgress(p => p && ({ ...p, liveVars: { ...p.liveVars, [ev.varName as string]: ev.value as string } }));
-    if (ev.t === "watch_ready" && ev.watchId) { setWatchId(ev.watchId as string); }
+    if (ev.t === "watch_ready" && ev.watchId) {
+      const wid = ev.watchId as string;
+      setWatchId(wid);
+      openWatch(wid);
+    }
+  }, [openWatch]);
+
+  const cancelSingle = useCallback(() => {
+    abortRef.current?.abort();
   }, []);
 
   const runSingle = useCallback(async () => {
+    const ac = new AbortController();
+    abortRef.current = ac;
     setSinglePending(true);
     setExecProgress({ activeIdx: null, doneMap: {}, liveVars: {} });
     setWatchId(null); setWatchShot(""); closeWatch();
     try {
-      const d = await streamScrape(buildRequest(form.getValues()), handleExecEv);
+      const d = await streamScrape(buildRequest(form.getValues()), handleExecEv, ac.signal);
       addSnap(d);
       toast({ title: "执行完成", description: `耗时 ${d.duration}ms` });
     } catch (e: unknown) {
-      toast({ title: "执行失败", description: e instanceof Error ? e.message : "未知错误", variant: "destructive" });
+      if (e instanceof DOMException && e.name === "AbortError") {
+        toast({ title: "已取消执行" });
+      } else {
+        toast({ title: "执行失败", description: e instanceof Error ? e.message : "未知错误", variant: "destructive" });
+      }
     } finally {
+      abortRef.current = null;
       setSinglePending(false);
       setTimeout(() => { setExecProgress(null); setWatchId(null); closeWatch(); }, 4000);
     }
@@ -891,10 +909,18 @@ export default function Home() {
                 <Button type="button" variant="destructive" className="w-full" size="lg" onClick={() => { stopLoopRef.current = true; }}>
                   <Square className="mr-2 h-4 w-4 fill-current" />停止循环
                 </Button>
+              ) : singlePending ? (
+                <div className="flex gap-2">
+                  <Button type="button" size="lg" className="flex-1" disabled>
+                    <Loader2 className="mr-2 h-4 w-4 animate-spin" />执行中...
+                  </Button>
+                  <Button type="button" size="lg" variant="destructive" className="px-4" onClick={cancelSingle} title="取消执行">
+                    <Square className="h-4 w-4 fill-current" />
+                  </Button>
+                </div>
               ) : (
-                <Button type="submit" className="w-full" size="lg" disabled={isRunning}>
-                  {singlePending ? <><Loader2 className="mr-2 h-4 w-4 animate-spin" />执行中...</>
-                    : loopEnabled ? <><Repeat className="mr-2 h-4 w-4" />开始循环（{form.watch("loopCount")} 次）</>
+                <Button type="submit" className="w-full" size="lg">
+                  {loopEnabled ? <><Repeat className="mr-2 h-4 w-4" />开始循环（{form.watch("loopCount")} 次）</>
                     : <><Play className="mr-2 h-4 w-4" />{triggerCount === 0 ? "执行一次" : `再执行一次（第 ${triggerCount + 1} 次）`}</>}
                 </Button>
               )}
