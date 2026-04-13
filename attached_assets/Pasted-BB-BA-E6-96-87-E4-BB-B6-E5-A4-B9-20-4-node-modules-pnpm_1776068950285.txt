@@ -1,0 +1,17 @@
+BB%BA%E6%96%87%E4%BB%B6%E5%A4%B9%20(4)/node_modules/.pnpm/vite@7.3.1_@types+node@25.3_847d3f1dfd8a5a4dca3b40dafc2c9d32/node_modules/vite/dist/node/chunks/config.js:22670:26)
+16:28:40 [vite] Internal server error: failed to resolve "extends":"../../tsconfig.base.json" in C:\Users\10090\Desktop\酒馆文件夹\新建文件夹 (4)\artifacts\scraper-tool\tsconfig.json
+  Plugin: vite:esbuild
+  File: C:/Users/10090/Desktop/酒馆文件夹/新建文件夹 (4)/artifacts/scraper-tool/src/main.tsx
+      at resolveExtends (file:///C:/Users/10090/Desktop/%E9%85%92%E9%A6%86%E6%96%87%E4%BB%B6%E5%A4%B9/%E6%96%B0%E5%BB%BA%E6%96%87%E4%BB%B6%E5%A4%B9%20(4)/node_modules/.pnpm/vite@7.3.1_@types+node@25.3_847d3f1dfd8a5a4dca3b40dafc2c9d32/node_modules/vite/dist/node/chunks/config.js:5809:8)
+      at parseExtends (file:///C:/Users/10090/Desktop/%E9%85%92%E9%A6%86%E6%96%87%E4%BB%B6%E5%A4%B9/%E6%96%B0%E5%BB%BA%E6%96%87%E4%BB%B6%E5%A4%B9%20(4)/node_modules/.pnpm/vite@7.3.1_@types+node@25.3_847d3f1dfd8a5a4dca3b40dafc2c9d32/node_modules/vite/dist/node/chunks/config.js:5775:71)
+      at parse$13 (file:///C:/Users/10090/Desktop/%E9%85%92%E9%A6%86%E6%96%87%E4%BB%B6%E5%A4%B9/%E6%96%B0%E5%BB%BA%E6%96%87%E4%BB%B6%E5%A4%B9%20(4)/node_modules/.pnpm/vite@7.3.1_@types+node@25.3_847d3f1dfd8a5a4dca3b40dafc2c9d32/node_modules/vite/dist/node/chunks/config.js:5677:23)
+      at async loadTsconfigJsonForFile (file:///C:/Users/10090/Desktop/%E9%85%92%E9%A6%86%E6%96%87%E4%BB%B6%E5%A4%B9/%E6%96%B0%E5%BB%BA%E6%96%87%E4%BB%B6%E5%A4%B9%20(4)/node_modules/.pnpm/vite@7.3.1_@types+node@25.3_847d3f1dfd8a5a4dca3b40dafc2c9d32/node_modules/vite/dist/node/chunks/config.js:6286:37)
+      at async transformWithEsbuild (file:///C:/Users/10090/Desktop/%E9%85%92%E9%A6%86%E6%96%87%E4%BB%B6%E5%A4%B9/%E6%96%B0%E5%BB%BA%E6%96%87%E4%BB%B6%E5%A4%B9%20(4)/node_modules/.pnpm/vite@7.3.1_@types+node@25.3_847d3f1dfd8a5a4dca3b40dafc2c9d32/node_modules/vite/dist/node/chunks/config.js:6086:55)
+      at async TransformPluginContext.transform (file:///C:/Users/10090/Desktop/%E9%85%92%E9%A6%86%E6%96%87%E4%BB%B6%E5%A4%B9/%E6%96%B0%E5%BB%BA%E6%96%87%E4%BB%B6%E5%A4%B9%20(4)/node_modules/.pnpm/vite@7.3.1_@types+node@25.3_847d3f1dfd8a5a4dca3b40dafc2c9d32/node_modules/vite/dist/node/chunks/config.js:6172:20)
+      at async EnvironmentPluginContainer.transform (file:///C:/Users/10090/Desktop/%E9%85%92%E9%A6%86%E6%96%87%E4%BB%B6%E5%A4%B9/%E6%96%B0%E5%BB%BA%E6%96%87%E4%BB%B6%E5%A4%B9%20(4)/node_modules/.pnpm/vite@7.3.1_@types+node@25.3_847d3f1dfd8a5a4dca3b40dafc2c9d32/node_modules/vite/dist/node/chunks/config.js:28797:14)
+      at async loadAndTransform (file:///C:/Users/10090/Desktop/%E9%85%92%E9%A6%86%E6%96%87%E4%BB%B6%E5%A4%B9/%E6%96%B0%E5%BB%BA%E6%96%87%E4%BB%B6%E5%A4%B9%20(4)/node_modules/.pnpm/vite@7.3.1_@types+node@25.3_847d3f1dfd8a5a4dca3b40dafc2c9d32/node_modules/vite/dist/node/chunks/config.js:22670:26) (x2)
+16:28:44 [vite] (client) Pre-transform error: failed to resolve "extends":"../../tsconfig.base.json" in C:\Users\10090\Desktop\酒馆文件夹\新建文件夹 (4)\artifacts\scraper-tool\tsconfig.json
+  Plugin: vite:esbuild
+  File: C:/Users/10090/Desktop/酒馆文件夹/新建文件夹 (4)/artifacts/scraper-tool/src/main.tsx
+16:28:44 [vite] Internal server error: failed to resolve "extends":"../../tsconfig.base.json" in C:\Users\10090\Desktop\酒馆文件夹\新建文件夹 (4)\artifacts\scraper-tool\tsconfig.json
+  Plugin: vite:esbuild
