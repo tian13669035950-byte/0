@@ -567,6 +567,63 @@ router.post("/scrape/stream", async (req, res) => {
   res.end();
 });
 
+// ─── POST /parallel/stream  (run multiple tracks simultaneously) ──────────────
+
+const ParallelTrackSchema = z.object({
+  url: z.string().url(),
+  options: ScrapeOptionsSchema,
+  proxy: z.string().optional(),
+  headed: z.boolean().optional(),
+  label: z.string().optional(),
+});
+
+router.post("/parallel/stream", async (req, res) => {
+  const schema = z.object({
+    tracks: z.array(ParallelTrackSchema).min(2).max(6),
+  });
+
+  const parsed = schema.safeParse(req.body);
+  if (!parsed.success) {
+    res.status(400).json({ error: "bad_request", message: "Invalid request body" });
+    return;
+  }
+
+  res.setHeader("Content-Type", "application/x-ndjson; charset=utf-8");
+  res.setHeader("Cache-Control", "no-cache");
+  res.setHeader("X-Accel-Buffering", "no");
+  res.flushHeaders();
+
+  const write = (obj: object) => {
+    try { res.write(JSON.stringify(obj) + "\n"); } catch { /* client disconnected */ }
+  };
+
+  const keepalive = setInterval(() => {
+    try { res.write(": ping\n"); } catch { /* closed */ }
+  }, 8000);
+
+  await Promise.all(
+    parsed.data.tracks.map(async (track, idx) => {
+      try {
+        const result = await runScrapeSession(
+          track.url,
+          track.options,
+          (event) => write({ track: idx, ...event }),
+          undefined,
+          track.proxy,
+          track.headed,
+        );
+        write({ track: idx, t: "result", ...result });
+      } catch (err) {
+        write({ track: idx, t: "error", message: err instanceof Error ? err.message : String(err) });
+      }
+    })
+  );
+
+  clearInterval(keepalive);
+  write({ t: "all_done" });
+  res.end();
+});
+
 // ─── GET /scrape/history ──────────────────────────────────────────────────────
 
 router.get("/scrape/history", (_req, res) => {

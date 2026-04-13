@@ -1,6 +1,6 @@
 import { Link, useLocation } from "wouter";
 import { cn } from "@/lib/utils";
-import { Terminal, Clock, Code2, Download } from "lucide-react";
+import { Terminal, Clock, Code2, Download, GitFork } from "lucide-react";
 import { ReactNode } from "react";
 
 export function Layout({ children }: { children: ReactNode }) {
@@ -40,6 +40,18 @@ export function Layout({ children }: { children: ReactNode }) {
             >
               <Clock className="h-3.5 w-3.5 shrink-0" />
               <span className="text-xs sm:text-sm">历史记录</span>
+            </Link>
+            <Link
+              href="/parallel"
+              className={cn(
+                "flex items-center gap-1.5 px-2.5 py-1.5 rounded-md transition-colors",
+                location === "/parallel"
+                  ? "bg-primary/10 text-primary"
+                  : "text-foreground/60 hover:text-foreground hover:bg-muted"
+              )}
+            >
+              <GitFork className="h-3.5 w-3.5 shrink-0" />
+              <span className="text-xs sm:text-sm">并行执行</span>
             </Link>
           </nav>
           <a
