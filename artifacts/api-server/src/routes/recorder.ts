@@ -192,6 +192,19 @@ const GET_LABEL = `(el) => {
   ).replace(/\\s+/g, ' ').trim();
 }`;
 
+// ─── POST /api/record/session/:id/screenshot  (force immediate screenshot)
+router.post("/record/session/:id/screenshot", async (req, res) => {
+  const session = sessions.get(req.params.id);
+  if (!session) return res.status(404).json({ error: "Session not found" });
+  session.lastActivity = Date.now();
+  try {
+    const shot = await session.page.screenshot({ type: "jpeg", quality: 55, timeout: 4000 });
+    res.json({ data: shot.toString("base64"), url: session.page.url() });
+  } catch (e: unknown) {
+    res.status(500).json({ error: e instanceof Error ? e.message : String(e) });
+  }
+});
+
 // ─── POST /api/record/session/:id/detect  (detect element at coords, NO action)
 router.post("/record/session/:id/detect", async (req, res) => {
   const session = sessions.get(req.params.id);
