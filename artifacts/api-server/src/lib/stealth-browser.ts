@@ -203,12 +203,18 @@ async function ensureXvfb(): Promise<string> {
 
 // ─── Browser launch ───────────────────────────────────────────────────────────
 
+const isLinux = process.platform === "linux";
+
 export async function launchStealthBrowser(headed = false) {
   const extraArgs: string[] = [];
 
   if (headed) {
-    const display = await ensureXvfb();
-    process.env.DISPLAY = display;
+    // Xvfb is only needed on Linux (e.g. Replit / headless servers).
+    // On Windows and macOS the machine has a real display — skip Xvfb entirely.
+    if (isLinux) {
+      const display = await ensureXvfb();
+      process.env.DISPLAY = display;
+    }
   } else {
     extraArgs.push("--disable-gpu");
   }
