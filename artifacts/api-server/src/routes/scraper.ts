@@ -408,6 +408,7 @@ router.post("/scrape", async (req, res) => {
       headings, links, paragraphs, images, metaTags,
       customResults,
       clickedElement,
+      capturedVars: vars,
     });
   } catch (err: unknown) {
     if (browser) await browser.close().catch(() => {});

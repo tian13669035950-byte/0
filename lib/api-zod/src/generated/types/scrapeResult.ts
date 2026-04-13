@@ -10,6 +10,7 @@ import type { Heading } from "./heading";
 import type { Image } from "./image";
 import type { Link } from "./link";
 import type { MetaTag } from "./metaTag";
+import type { ScrapeResultCapturedVars } from "./scrapeResultCapturedVars";
 
 export interface ScrapeResult {
   id: string;
@@ -26,4 +27,6 @@ export interface ScrapeResult {
   customResults?: CustomResult[];
   /** CSS selector that was clicked, if any */
   clickedElement?: string;
+  /** Variables captured by "capture" steps, keyed by varName */
+  capturedVars?: ScrapeResultCapturedVars;
 }

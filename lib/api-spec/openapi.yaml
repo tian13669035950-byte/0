@@ -239,6 +239,11 @@ components:
         clickedElement:
           type: string
           description: CSS selector that was clicked, if any
+        capturedVars:
+          type: object
+          additionalProperties:
+            type: string
+          description: Variables captured by "capture" steps, keyed by varName
       required:
         - id
         - url

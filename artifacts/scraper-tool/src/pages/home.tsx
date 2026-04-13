@@ -602,6 +602,59 @@ export default function Home() {
             </div>
           )}
 
+          {/* Captured vars tracking */}
+          {snapshots.length > 0 && (() => {
+            const allVarNames = Array.from(new Set(snapshots.flatMap(s => Object.keys(s.result.capturedVars ?? {}))));
+            if (allVarNames.length === 0) return null;
+            return (
+              <Card className="border-teal-200 shadow-sm animate-in fade-in">
+                <CardHeader className="pb-3">
+                  <CardTitle className="flex items-center gap-2 text-base"><Crosshair className="h-4 w-4 text-teal-600" />读取到的变量</CardTitle>
+                  <CardDescription className="text-xs">由"读取保存"步骤抓取的实时数据</CardDescription>
+                </CardHeader>
+                <CardContent className="space-y-3">
+                  {allVarNames.map((varName) => {
+                    const history = snapshots.map(s => ({ time: s.triggeredAt, iteration: s.iteration, value: (s.result.capturedVars ?? {})[varName] ?? "" })).filter(e => e.value);
+                    const latest = history[0];
+                    const changed = history.length > 1 && history[0].value !== history[1].value;
+                    return (
+                      <div key={varName} className="border border-teal-200 rounded-md overflow-hidden">
+                        <div className="flex items-center justify-between px-3 py-2 bg-teal-50/60 border-b border-teal-200 flex-wrap gap-2">
+                          <div className="flex items-center gap-2">
+                            <span className="font-medium text-sm">{varName}</span>
+                            <code className="text-xs font-mono text-muted-foreground bg-muted px-1.5 py-0.5 rounded">${"{" + varName + "}"}</code>
+                          </div>
+                          {changed && <Badge className="text-xs bg-amber-100 text-amber-700 border-amber-200">有变化</Badge>}
+                        </div>
+                        <div className="px-3 py-2.5 border-b">
+                          <p className="text-xs text-muted-foreground mb-1">最新值</p>
+                          {latest?.value
+                            ? <div className="font-mono text-base font-semibold text-teal-700">{latest.value}</div>
+                            : <span className="text-xs text-muted-foreground">暂无数据</span>}
+                        </div>
+                        {history.length > 1 && (
+                          <div className="px-3 py-2 bg-muted/10">
+                            <p className="text-xs text-muted-foreground mb-1.5">历史（{history.length} 次）</p>
+                            <div className="space-y-1 max-h-36 overflow-y-auto">
+                              {history.map((e, ei) => (
+                                <div key={ei} className="flex items-center gap-2 text-xs">
+                                  <span className="text-muted-foreground font-mono w-16 shrink-0">{e.time}</span>
+                                  {e.iteration && <span className="text-muted-foreground shrink-0">#{e.iteration}</span>}
+                                  <span className={`font-mono ${ei === 0 ? "font-medium text-teal-700" : "text-muted-foreground"}`}>{e.value || "—"}</span>
+                                  {ei === 0 && <Badge variant="outline" className="text-[10px] px-1 py-0 h-4 ml-auto shrink-0">最新</Badge>}
+                                </div>
+                              ))}
+                            </div>
+                          </div>
+                        )}
+                      </div>
+                    );
+                  })}
+                </CardContent>
+              </Card>
+            );
+          })()}
+
           {/* Data tracking */}
           {form.watch("customSelectors").length > 0 && snapshots.length > 0 && (
             <Card className="border-border/50 shadow-sm animate-in fade-in">
@@ -675,9 +728,25 @@ export default function Home() {
                         {isExpanded ? <ChevronUp className="h-4 w-4 text-muted-foreground shrink-0" /> : <ChevronDown className="h-4 w-4 text-muted-foreground shrink-0" />}
                       </button>
                       {isExpanded && (
-                        <div className="px-6 pb-4 animate-in fade-in slide-in-from-top-2 duration-200">
+                        <div className="px-6 pb-4 animate-in fade-in slide-in-from-top-2 duration-200 space-y-2 mt-2">
+                          {/* Captured variables for this snapshot */}
+                          {r.capturedVars && Object.keys(r.capturedVars).length > 0 && (
+                            <div className="border border-teal-200 rounded-md overflow-hidden">
+                              <div className="px-3 py-2 bg-teal-50/60 border-b border-teal-200 flex items-center gap-2">
+                                <Crosshair className="h-3.5 w-3.5 text-teal-600" />
+                                <span className="font-medium text-xs text-teal-700">读取保存的变量</span>
+                              </div>
+                              {Object.entries(r.capturedVars).map(([k, v]) => (
+                                <div key={k} className="px-3 py-2 border-b last:border-b-0 flex items-center gap-3">
+                                  <code className="text-xs font-mono text-muted-foreground bg-muted px-1.5 py-0.5 rounded shrink-0">{k}</code>
+                                  <span className="font-mono text-sm font-medium text-teal-700">{v}</span>
+                                </div>
+                              ))}
+                            </div>
+                          )}
+                          {/* Custom selector results */}
                           {r.customResults && r.customResults.length > 0 ? (
-                            <div className="space-y-2 mt-2">
+                            <div className="space-y-2">
                               {r.customResults.map((cr, i) => (
                                 <div key={i} className="border rounded-md overflow-hidden">
                                   <div className="flex items-center gap-2 px-3 py-2 bg-muted/40 border-b"><span className="font-medium text-xs">{cr.name}</span><code className="text-xs font-mono text-muted-foreground">{cr.selector}</code></div>
@@ -686,9 +755,9 @@ export default function Home() {
                                 </div>
                               ))}
                             </div>
-                          ) : (
-                            <p className="text-xs text-muted-foreground mt-2">没有配置自定义数据项，或未找到匹配内容</p>
-                          )}
+                          ) : !r.capturedVars || Object.keys(r.capturedVars).length === 0 ? (
+                            <p className="text-xs text-muted-foreground">没有配置自定义数据项，或未找到匹配内容</p>
+                          ) : null}
                         </div>
                       )}
                     </div>

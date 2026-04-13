@@ -102,6 +102,11 @@ export interface ScrapeRequest {
   options: ScrapeOptions;
 }
 
+/**
+ * Variables captured by "capture" steps, keyed by varName
+ */
+export type ScrapeResultCapturedVars = { [key: string]: string };
+
 export interface Heading {
   level: string;
   text: string;
@@ -143,6 +148,8 @@ export interface ScrapeResult {
   customResults?: CustomResult[];
   /** CSS selector that was clicked, if any */
   clickedElement?: string;
+  /** Variables captured by "capture" steps, keyed by varName */
+  capturedVars?: ScrapeResultCapturedVars;
 }
 
 export interface ScrapeHistoryItem {

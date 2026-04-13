@@ -18,6 +18,7 @@ export * from "./scrapeHistoryItem";
 export * from "./scrapeOptions";
 export * from "./scrapeRequest";
 export * from "./scrapeResult";
+export * from "./scrapeResultCapturedVars";
 export * from "./scrapeStep";
 export * from "./scrapeStepListenFor";
 export * from "./scrapeStepType";

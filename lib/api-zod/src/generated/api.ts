@@ -178,6 +178,10 @@ export const StartScrapeResponse = zod.object({
     .string()
     .optional()
     .describe("CSS selector that was clicked, if any"),
+  capturedVars: zod
+    .record(zod.string(), zod.string())
+    .optional()
+    .describe('Variables captured by \"capture\" steps, keyed by varName'),
 });
 
 /**
