@@ -393,19 +393,41 @@ router.post("/record/session/:id/step", async (req, res) => {
         }
         break;
 
-      case "capture":
+      case "capture": {
         if (step.selector?.trim()) {
-          const el = await page.$(step.selector);
-          if (el) {
-            const captured = (await el.textContent() ?? "").trim();
+          const sel = step.selector.trim();
+          let captured: string | null = await page.evaluate((s) => {
+            const el = document.querySelector(s);
+            if (!el) return null;
+            if (el instanceof HTMLInputElement || el instanceof HTMLTextAreaElement || el instanceof HTMLSelectElement)
+              return el.value?.trim() || "";
+            return el.textContent?.trim() || "";
+          }, sel);
+          // Fallback: search iframes
+          if (!captured) {
+            for (const frame of page.frames()) {
+              if (frame === page.mainFrame()) continue;
+              try {
+                const v = await frame.evaluate((s) => {
+                  const el = document.querySelector(s);
+                  if (!el) return null;
+                  if (el instanceof HTMLInputElement || el instanceof HTMLTextAreaElement || el instanceof HTMLSelectElement)
+                    return el.value?.trim() || "";
+                  return el.textContent?.trim() || "";
+                }, sel);
+                if (v) { captured = v; break; }
+              } catch { /* cross-origin, skip */ }
+            }
+          }
+          if (captured) {
             step.label = captured.slice(0, 80);
-            // Store in session vars if a variable name is given
             if (step.varName?.trim()) {
               session.vars[step.varName.trim()] = captured;
             }
           }
         }
         break;
+      }
 
       case "newtab": {
         const ctx = page.context();
