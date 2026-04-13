@@ -104,12 +104,34 @@ components:
           type: boolean
         metaTags:
           type: boolean
+        customSelectors:
+          type: array
+          items:
+            $ref: "#/components/schemas/CustomSelector"
+        clickSelector:
+          type: string
+          description: CSS selector of element to click before extracting
+        clickWaitMs:
+          type: number
+          description: Milliseconds to wait after clicking
       required:
         - headings
         - links
         - paragraphs
         - images
         - metaTags
+    CustomSelector:
+      type: object
+      properties:
+        name:
+          type: string
+          description: Label for this extraction
+        selector:
+          type: string
+          description: CSS selector to extract text from
+      required:
+        - name
+        - selector
     ScrapeResult:
       type: object
       properties:
@@ -144,6 +166,13 @@ components:
           type: array
           items:
             $ref: "#/components/schemas/MetaTag"
+        customResults:
+          type: array
+          items:
+            $ref: "#/components/schemas/CustomResult"
+        clickedElement:
+          type: string
+          description: CSS selector that was clicked, if any
       required:
         - id
         - url
@@ -217,6 +246,21 @@ components:
         - scrapedAt
         - duration
         - itemCount
+    CustomResult:
+      type: object
+      properties:
+        name:
+          type: string
+        selector:
+          type: string
+        values:
+          type: array
+          items:
+            type: string
+      required:
+        - name
+        - selector
+        - values
     ErrorResponse:
       type: object
       properties:

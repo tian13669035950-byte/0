@@ -9,12 +9,24 @@ export interface HealthStatus {
   status: string;
 }
 
+export interface CustomSelector {
+  /** Label for this extraction */
+  name: string;
+  /** CSS selector to extract text from */
+  selector: string;
+}
+
 export interface ScrapeOptions {
   headings: boolean;
   links: boolean;
   paragraphs: boolean;
   images: boolean;
   metaTags: boolean;
+  customSelectors?: CustomSelector[];
+  /** CSS selector of element to click before extracting */
+  clickSelector?: string;
+  /** Milliseconds to wait after clicking */
+  clickWaitMs?: number;
 }
 
 export interface ScrapeRequest {
@@ -43,6 +55,12 @@ export interface MetaTag {
   content: string;
 }
 
+export interface CustomResult {
+  name: string;
+  selector: string;
+  values: string[];
+}
+
 export interface ScrapeResult {
   id: string;
   url: string;
@@ -55,6 +73,9 @@ export interface ScrapeResult {
   paragraphs: string[];
   images: Image[];
   metaTags: MetaTag[];
+  customResults?: CustomResult[];
+  /** CSS selector that was clicked, if any */
+  clickedElement?: string;
 }
 
 export interface ScrapeHistoryItem {

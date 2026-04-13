@@ -5,6 +5,7 @@
  * API specification
  * OpenAPI spec version: 0.1.0
  */
+import type { CustomResult } from "./customResult";
 import type { Heading } from "./heading";
 import type { Image } from "./image";
 import type { Link } from "./link";
@@ -22,4 +23,7 @@ export interface ScrapeResult {
   paragraphs: string[];
   images: Image[];
   metaTags: MetaTag[];
+  customResults?: CustomResult[];
+  /** CSS selector that was clicked, if any */
+  clickedElement?: string;
 }

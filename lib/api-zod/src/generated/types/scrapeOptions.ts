@@ -5,6 +5,7 @@
  * API specification
  * OpenAPI spec version: 0.1.0
  */
+import type { CustomSelector } from "./customSelector";
 
 export interface ScrapeOptions {
   headings: boolean;
@@ -12,4 +13,9 @@ export interface ScrapeOptions {
   paragraphs: boolean;
   images: boolean;
   metaTags: boolean;
+  customSelectors?: CustomSelector[];
+  /** CSS selector of element to click before extracting */
+  clickSelector?: string;
+  /** Milliseconds to wait after clicking */
+  clickWaitMs?: number;
 }

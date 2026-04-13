@@ -27,6 +27,22 @@ export const StartScrapeBody = zod.object({
     paragraphs: zod.boolean(),
     images: zod.boolean(),
     metaTags: zod.boolean(),
+    customSelectors: zod
+      .array(
+        zod.object({
+          name: zod.string().describe("Label for this extraction"),
+          selector: zod.string().describe("CSS selector to extract text from"),
+        }),
+      )
+      .optional(),
+    clickSelector: zod
+      .string()
+      .optional()
+      .describe("CSS selector of element to click before extracting"),
+    clickWaitMs: zod
+      .number()
+      .optional()
+      .describe("Milliseconds to wait after clicking"),
   }),
 });
 
@@ -61,6 +77,19 @@ export const StartScrapeResponse = zod.object({
       content: zod.string(),
     }),
   ),
+  customResults: zod
+    .array(
+      zod.object({
+        name: zod.string(),
+        selector: zod.string(),
+        values: zod.array(zod.string()),
+      }),
+    )
+    .optional(),
+  clickedElement: zod
+    .string()
+    .optional()
+    .describe("CSS selector that was clicked, if any"),
 });
 
 /**

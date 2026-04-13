@@ -5,12 +5,20 @@ import { z } from "zod";
 
 const router = Router();
 
+const CustomSelectorSchema = z.object({
+  name: z.string(),
+  selector: z.string(),
+});
+
 const ScrapeOptionsSchema = z.object({
   headings: z.boolean(),
   links: z.boolean(),
   paragraphs: z.boolean(),
   images: z.boolean(),
   metaTags: z.boolean(),
+  customSelectors: z.array(CustomSelectorSchema).optional(),
+  clickSelector: z.string().optional(),
+  clickWaitMs: z.number().optional(),
 });
 
 const ScrapeRequestSchema = z.object({
@@ -58,6 +66,21 @@ router.post("/scrape", async (req, res) => {
 
     await page.goto(url, { waitUntil: "domcontentloaded", timeout: 20000 });
     await page.waitForTimeout(1500);
+
+    let clickedElement: string | undefined;
+
+    if (options.clickSelector && options.clickSelector.trim()) {
+      const selector = options.clickSelector.trim();
+      try {
+        await page.waitForSelector(selector, { timeout: 5000 });
+        await page.click(selector);
+        clickedElement = selector;
+        const waitMs = options.clickWaitMs ?? 2000;
+        await page.waitForTimeout(waitMs);
+      } catch {
+        req.log.warn({ selector }, "clickSelector not found or click failed");
+      }
+    }
 
     const title = await page.title();
 
@@ -120,6 +143,21 @@ router.post("/scrape", async (req, res) => {
         })
       : [];
 
+    const customResults: { name: string; selector: string; values: string[] }[] = [];
+    if (options.customSelectors && options.customSelectors.length > 0) {
+      for (const cs of options.customSelectors) {
+        if (!cs.selector.trim()) continue;
+        const values = await page.evaluate((sel) => {
+          const els = document.querySelectorAll(sel);
+          return Array.from(els)
+            .map((el) => el.textContent?.trim() || "")
+            .filter((t) => t.length > 0)
+            .slice(0, 50);
+        }, cs.selector);
+        customResults.push({ name: cs.name, selector: cs.selector, values });
+      }
+    }
+
     await browser.close();
 
     const duration = Date.now() - startTime;
@@ -127,12 +165,18 @@ router.post("/scrape", async (req, res) => {
     const scrapedAt = new Date().toISOString();
 
     const itemCount =
-      headings.length + links.length + paragraphs.length + images.length + metaTags.length;
+      headings.length + links.length + paragraphs.length + images.length + metaTags.length +
+      customResults.reduce((sum, r) => sum + r.values.length, 0);
 
     history.unshift({ id, url, title, scrapedAt, duration, itemCount });
     if (history.length > 50) history.pop();
 
-    res.json({ id, url, title, scrapedAt, duration, headings, links, paragraphs, images, metaTags });
+    res.json({
+      id, url, title, scrapedAt, duration,
+      headings, links, paragraphs, images, metaTags,
+      customResults,
+      clickedElement,
+    });
   } catch (err: unknown) {
     if (browser) await browser.close().catch(() => {});
     const message = err instanceof Error ? err.message : "Unknown error";
