@@ -153,6 +153,7 @@ export default function Home() {
   const [recordedSteps, setRecordedSteps] = useState<RecordedStep[]>([]);
   const [iframeSrc, setIframeSrc] = useState("");
   const [iframeReady, setIframeReady] = useState(false);
+  const [panelCollapsed, setPanelCollapsed] = useState(false);
   const iframeRef = useRef<HTMLIFrameElement>(null);
   const recStepIdRef = useRef(0);
 
@@ -1035,92 +1036,113 @@ export default function Home() {
             />
           </div>
 
-          {/* Step log panel */}
-          <div className="w-full md:w-72 lg:w-80 border-t md:border-t-0 md:border-l flex flex-col bg-muted/20 shrink-0 max-h-[45vh] md:max-h-none">
-            <div className="flex items-center justify-between px-3 py-2.5 border-b bg-background">
-              <div className="flex items-center gap-2 text-sm font-medium">
-                <Activity className="h-4 w-4 text-primary" />
-                已记录步骤
-                {recordedSteps.length > 0 && (
-                  <Badge variant="secondary" className="font-mono text-xs">{recordedSteps.length}</Badge>
+          {/* Step log panel — collapsible */}
+          <div className={`
+            border-t md:border-t-0 md:border-l flex flex-col bg-muted/20 shrink-0 transition-all duration-200
+            ${panelCollapsed
+              ? "w-full md:w-10 max-h-12 md:max-h-none overflow-hidden"
+              : "w-full md:w-72 lg:w-80 max-h-[42vh] md:max-h-none"
+            }
+          `}>
+            {/* Panel header — always visible */}
+            <div className="flex items-center justify-between px-3 py-2 border-b bg-background shrink-0">
+              {!panelCollapsed && (
+                <div className="flex items-center gap-2 text-sm font-medium min-w-0">
+                  <Activity className="h-4 w-4 text-primary shrink-0" />
+                  <span className="truncate">已录制</span>
+                  <Badge variant="secondary" className="font-mono text-xs shrink-0">
+                    {recordedSteps.length}
+                  </Badge>
+                </div>
+              )}
+              {panelCollapsed && (
+                <div className="flex items-center gap-1.5 text-xs text-muted-foreground md:flex-col md:gap-0">
+                  <Activity className="h-3.5 w-3.5 text-primary" />
+                  <span className="font-mono md:hidden">{recordedSteps.length} 步</span>
+                </div>
+              )}
+              <div className={`flex items-center gap-1 shrink-0 ${panelCollapsed ? "ml-auto" : ""}`}>
+                {!panelCollapsed && recordedSteps.length > 0 && (
+                  <Button type="button" variant="ghost" size="sm" className="h-6 px-1.5 text-xs text-muted-foreground"
+                    onClick={() => setRecordedSteps((s) => s.slice(0, -1))}>
+                    <Undo2 className="h-3 w-3" />
+                  </Button>
                 )}
+                <Button type="button" variant="ghost" size="sm"
+                  className="h-6 w-6 p-0 text-muted-foreground"
+                  onClick={() => setPanelCollapsed(c => !c)}
+                  title={panelCollapsed ? "展开步骤面板" : "收起步骤面板"}
+                >
+                  {panelCollapsed
+                    ? <ChevronUp className="h-3.5 w-3.5 md:rotate-90" />
+                    : <ChevronDown className="h-3.5 w-3.5 md:rotate-90" />
+                  }
+                </Button>
               </div>
-              {recordedSteps.length > 0 && (
-                <Button
-                  type="button"
-                  variant="ghost"
-                  size="sm"
-                  className="h-7 px-2 text-xs text-muted-foreground"
-                  onClick={() => setRecordedSteps((s) => s.slice(0, -1))}
-                >
-                  <Undo2 className="h-3 w-3 mr-1" />撤销
-                </Button>
-              )}
             </div>
 
-            <ScrollArea className="flex-1">
-              {recordedSteps.length === 0 ? (
-                <div className="flex flex-col items-center justify-center h-40 text-center px-4">
-                  <MousePointerClick className="h-8 w-8 text-muted-foreground/40 mb-3" />
-                  <p className="text-xs text-muted-foreground">在左侧页面上点击、输入、选择</p>
-                  <p className="text-xs text-muted-foreground mt-1">操作会自动记录在这里</p>
-                </div>
-              ) : (
-                <div className="p-2 space-y-1.5">
-                  {recordedSteps.map((rs, i) => {
-                    const stepDef = rs.type === "click"
-                      ? { label: "点击", icon: MousePointerClick, color: "blue" }
-                      : rs.type === "type"
-                      ? { label: "输入", icon: Type, color: "green" }
-                      : { label: "选择", icon: ListOrdered, color: "cyan" };
-                    const colors = COLOR_MAP[stepDef.color];
-                    const Icon = stepDef.icon;
-                    return (
-                      <div key={rs.id} className={`rounded-md border p-2 ${colors.bg} ${colors.border} animate-in slide-in-from-bottom-1`}>
-                        <div className="flex items-center gap-1.5 mb-1">
-                          <span className="text-[10px] font-mono text-muted-foreground">{i + 1}</span>
-                          <Icon className="h-3 w-3 shrink-0 text-foreground/60" />
-                          <span className="text-xs font-semibold">{stepDef.label}</span>
-                          {rs.navigatedTo && (
-                            <span className="text-[10px] text-muted-foreground ml-auto truncate max-w-[100px]">→ 新页面</span>
-                          )}
-                        </div>
-                        <code className="text-[10px] font-mono text-foreground/70 break-all leading-tight block">
-                          {rs.selector}
-                        </code>
-                        {rs.text && (
-                          <span className="text-[10px] text-green-700 mt-0.5 block truncate">"{rs.text}"</span>
-                        )}
-                        {rs.label && (
-                          <span className="text-[10px] text-muted-foreground mt-0.5 block truncate">{rs.label}</span>
-                        )}
-                      </div>
-                    );
-                  })}
-                </div>
-              )}
-            </ScrollArea>
+            {/* Panel body — hidden when collapsed */}
+            {!panelCollapsed && (
+              <>
+                <ScrollArea className="flex-1 min-h-0">
+                  {recordedSteps.length === 0 ? (
+                    <div className="flex flex-col items-center justify-center h-32 text-center px-4">
+                      <MousePointerClick className="h-7 w-7 text-muted-foreground/30 mb-2" />
+                      <p className="text-xs text-muted-foreground">点击页面元素，操作自动记录在这里</p>
+                    </div>
+                  ) : (
+                    <div className="p-2 space-y-1.5">
+                      {recordedSteps.map((rs, i) => {
+                        const stepDef = rs.type === "click"
+                          ? { label: "点击", icon: MousePointerClick, color: "blue" }
+                          : rs.type === "type"
+                          ? { label: "输入", icon: Type, color: "green" }
+                          : { label: "选择", icon: ListOrdered, color: "cyan" };
+                        const colors = COLOR_MAP[stepDef.color];
+                        const Icon = stepDef.icon;
+                        return (
+                          <div key={rs.id} className={`rounded-md border p-2 ${colors.bg} ${colors.border} animate-in slide-in-from-bottom-1`}>
+                            <div className="flex items-center gap-1.5 mb-0.5">
+                              <span className="text-[10px] font-mono text-muted-foreground w-4 shrink-0">{i + 1}</span>
+                              <Icon className="h-3 w-3 shrink-0 text-foreground/60" />
+                              <span className="text-xs font-semibold">{stepDef.label}</span>
+                              {rs.navigatedTo && (
+                                <span className="text-[10px] text-indigo-500 ml-auto shrink-0">→ 跳页</span>
+                              )}
+                            </div>
+                            <code className="text-[10px] font-mono text-foreground/60 break-all leading-tight block ml-5">
+                              {rs.selector}
+                            </code>
+                            {(rs.text || rs.label) && (
+                              <span className="text-[10px] text-muted-foreground ml-5 block truncate">
+                                {rs.text ? `"${rs.text}"` : rs.label}
+                              </span>
+                            )}
+                          </div>
+                        );
+                      })}
+                    </div>
+                  )}
+                </ScrollArea>
 
-            {/* Apply footer */}
-            <div className="p-3 border-t bg-background shrink-0 space-y-2">
-              {recordedSteps.length > 0 ? (
-                <Button
-                  type="button"
-                  className="w-full gap-2"
-                  onClick={applyRecordedSteps}
-                >
-                  <CheckCircle2 className="h-4 w-4" />
-                  应用 {recordedSteps.length} 个步骤到序列
-                </Button>
-              ) : (
-                <Button type="button" variant="outline" className="w-full" onClick={stopRecording}>
-                  取消录制
-                </Button>
-              )}
-              <p className="text-[10px] text-muted-foreground text-center">
-                应用后可在左侧步骤列表中编辑调整
-              </p>
-            </div>
+                {/* Apply footer */}
+                <div className="p-2.5 border-t bg-background shrink-0 space-y-1.5">
+                  {recordedSteps.length > 0 ? (
+                    <Button type="button" className="w-full gap-2 h-8 text-sm" onClick={applyRecordedSteps}>
+                      <CheckCircle2 className="h-3.5 w-3.5" />
+                      应用 {recordedSteps.length} 个步骤
+                    </Button>
+                  ) : (
+                    <Button type="button" variant="outline" className="w-full h-8 text-sm" onClick={stopRecording}>
+                      取消录制
+                    </Button>
+                  )}
+                  <p className="text-[10px] text-muted-foreground text-center leading-tight">
+                    应用后可在步骤列表中编辑调整
+                  </p>
+                </div>
+              </>
+            )}
           </div>
         </div>
       </div>
