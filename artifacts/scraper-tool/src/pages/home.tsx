@@ -20,7 +20,7 @@ import {
   Play, ArrowUp, ArrowDown, Timer, Save, FolderOpen, X,
   Keyboard, ListOrdered, Eye, MoveDown, Type, Activity,
   Video, StopCircle, Undo2, Link2, Download, Upload,
-  RefreshCw, Camera, ChevronRight, MousePointer2, ArrowLeftRight,
+  RefreshCw, Camera, ChevronRight, MousePointer2, ArrowLeftRight, Shield,
 } from "lucide-react";
 import type { ScrapeResult } from "@workspace/api-client-react/src/generated/api.schemas";
 
@@ -208,6 +208,10 @@ export default function Home() {
   const [watchUrl, setWatchUrl] = useState("");
   const watchEsRef = useRef<EventSource | null>(null);
 
+  // ── Proxy setting (persisted) ─────────────────────────────────────────────
+  const [proxyUrl, setProxyUrl] = useState(() => localStorage.getItem("scraper-proxy") ?? "");
+  const saveProxy = (v: string) => { setProxyUrl(v); if (v.trim()) localStorage.setItem("scraper-proxy", v); else localStorage.removeItem("scraper-proxy"); };
+
   // ── Recorder state ────────────────────────────────────────────────────────
   const [isRecording, setIsRecording] = useState(false);
   const [recordedSteps, setRecordedSteps] = useState<RecordedStep[]>([]);
@@ -318,12 +322,13 @@ export default function Home() {
 
   const buildRequest = useCallback((values: FormValues) => ({
     url: values.url,
+    proxy: proxyUrl.trim() || undefined,
     options: {
       headings: false, links: false, paragraphs: false, images: false, metaTags: false,
       steps: values.steps.length > 0 ? values.steps : undefined,
       customSelectors: values.customSelectors.length > 0 ? values.customSelectors : undefined,
     },
-  }), []);
+  }), [proxyUrl]);
 
   const addSnap = useCallback((data: ScrapeResult, iteration?: number, loopTotal?: number) => {
     const snap: Snapshot = { id: String(++snapshotIdRef.current), iteration, loopTotal, triggeredAt: new Date().toLocaleTimeString("zh-CN", { hour12: false }), duration: data.duration, result: data };
@@ -420,7 +425,7 @@ export default function Home() {
       const resp = await fetch("/api/record/session/start", {
         method: "POST",
         headers: { "Content-Type": "application/json" },
-        body: JSON.stringify({ url: url.trim() }),
+        body: JSON.stringify({ url: url.trim(), proxy: proxyUrl.trim() || undefined }),
       });
       if (!resp.ok) throw new Error(await resp.text());
       const { sessionId: sid, url: finalUrl } = await resp.json() as { sessionId: string; url: string };
@@ -653,6 +658,24 @@ export default function Home() {
                       <FormMessage />
                     </FormItem>
                   )} />
+                  {/* Proxy setting */}
+                  <div className="pt-1">
+                    <label className="text-xs text-muted-foreground flex items-center gap-1.5 mb-1">
+                      <Shield className="h-3 w-3" />代理设置（可选，用于绕过验证码 IP 限制）
+                    </label>
+                    <Input
+                      placeholder="http://user:pass@host:port 或 socks5://host:port"
+                      className="font-mono text-xs h-8"
+                      value={proxyUrl}
+                      onChange={e => saveProxy(e.target.value)}
+                    />
+                    {proxyUrl.trim() && (
+                      <p className="text-[10px] text-amber-600 mt-1 flex items-center gap-1">
+                        <span className="inline-block w-1.5 h-1.5 rounded-full bg-amber-500" />
+                        所有请求将通过此代理发送
+                      </p>
+                    )}
+                  </div>
                 </CardContent>
                 <CardFooter className="pt-0 pb-3">
                   <Button

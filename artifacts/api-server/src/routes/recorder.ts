@@ -50,14 +50,28 @@ setInterval(() => {
 }, 60_000);
 
 // ─── POST /api/record/session/start ──────────────────────────────────────────
+// Parse "http://user:pass@host:port" → Playwright proxy config
+function parseProxy(raw?: string) {
+  if (!raw?.trim()) return undefined;
+  try {
+    const u = new URL(raw.trim());
+    const server = `${u.protocol}//${u.host}`;
+    return { server, username: u.username || undefined, password: u.password || undefined };
+  } catch {
+    return { server: raw.trim() };
+  }
+}
+
 router.post("/record/session/start", async (req, res) => {
-  let { url } = req.body as { url?: string };
+  let { url, proxy: proxyRaw } = req.body as { url?: string; proxy?: string };
   if (!url?.trim()) return res.status(400).json({ error: "Missing url" });
   if (!/^https?:\/\//i.test(url)) url = "https://" + url;
 
+  const proxy = parseProxy(proxyRaw);
+
   try {
     const browser = await launchStealthBrowser();
-    const ctx = await newStealthContext(browser, { viewport: VIEWPORT });
+    const ctx = await newStealthContext(browser, { viewport: VIEWPORT, ...(proxy ? { proxy } : {}) });
     const page = await ctx.newPage();
 
     try {

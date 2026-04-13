@@ -46,7 +46,19 @@ const ScrapeOptionsSchema = z.object({
 const ScrapeRequestSchema = z.object({
   url: z.string().url(),
   options: ScrapeOptionsSchema,
+  proxy: z.string().optional(),
 });
+
+function parseProxy(raw?: string) {
+  if (!raw?.trim()) return undefined;
+  try {
+    const u = new URL(raw.trim());
+    const server = `${u.protocol}//${u.host}`;
+    return { server, username: u.username || undefined, password: u.password || undefined };
+  } catch {
+    return { server: raw.trim() };
+  }
+}
 
 // ─── Types ────────────────────────────────────────────────────────────────────
 
@@ -86,13 +98,15 @@ async function runScrapeSession(
   url: string,
   options: ScrapeOptions,
   emit: (event: StreamEvent) => void,
-  watchId?: string
+  watchId?: string,
+  proxyRaw?: string,
 ) {
   const startTime = Date.now();
+  const proxy = parseProxy(proxyRaw);
   const browser = await launchStealthBrowser();
 
   try {
-    const newCtx = () => newStealthContext(browser);
+    const newCtx = () => newStealthContext(browser, proxy ? { proxy } : {});
     let ctx = await newCtx();
     let page = await ctx.newPage();
 
@@ -540,7 +554,7 @@ router.post("/scrape/stream", async (req, res) => {
   write({ t: "watch_ready", watchId });
 
   try {
-    const result = await runScrapeSession(parsed.data.url, parsed.data.options, write, watchId);
+    const result = await runScrapeSession(parsed.data.url, parsed.data.options, write, watchId, parsed.data.proxy);
     write({ t: "result", ...result });
   } catch (err) {
     write({ t: "error", message: err instanceof Error ? err.message : "Unknown error" });
