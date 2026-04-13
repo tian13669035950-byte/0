@@ -17,12 +17,52 @@ export interface CollectedItem {
 }
 
 const KEY = "scraper-collected-v1";
+const BACKUP_API = "/api/store/backup";
 
 export const loadItems = (): CollectedItem[] => {
   try { return JSON.parse(localStorage.getItem(KEY) ?? "[]"); } catch { return []; }
 };
 
-const save = (items: CollectedItem[]) => localStorage.setItem(KEY, JSON.stringify(items));
+// Write to localStorage then fire-and-forget sync to backend file
+const save = (items: CollectedItem[]) => {
+  localStorage.setItem(KEY, JSON.stringify(items));
+  syncToBackend(items).catch(() => {});
+};
+
+// ── Backend file sync ─────────────────────────────────────────────────────────
+
+export const syncToBackend = async (items?: CollectedItem[]): Promise<void> => {
+  try {
+    await fetch(BACKUP_API, {
+      method: "POST",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify(items ?? loadItems()),
+    });
+  } catch { /* backend unreachable — silent */ }
+};
+
+// On startup: load from backend file, merge with whatever is in localStorage
+// (items already in localStorage take precedence; new items from file are appended)
+export const syncFromBackend = async (): Promise<void> => {
+  try {
+    const resp = await fetch(BACKUP_API);
+    if (!resp.ok) return;
+    const fileItems: CollectedItem[] = await resp.json();
+    if (!Array.isArray(fileItems) || fileItems.length === 0) return;
+
+    const local = loadItems();
+    const localIds = new Set(local.map(i => i.id));
+    const merged = [...local];
+    for (const item of fileItems) {
+      if (!localIds.has(item.id)) merged.push(item);
+    }
+    merged.sort((a, b) => new Date(b.scrapedAt).getTime() - new Date(a.scrapedAt).getTime());
+    localStorage.setItem(KEY, JSON.stringify(merged));
+    window.dispatchEvent(new StorageEvent("storage", { key: KEY }));
+  } catch { /* backend unreachable — silent */ }
+};
+
+// ── CRUD ──────────────────────────────────────────────────────────────────────
 
 export const addItemToStore = (item: Omit<CollectedItem, "id" | "note">): CollectedItem => {
   const full: CollectedItem = {
@@ -41,7 +81,10 @@ export const deleteItemFromStore = (id: string) => save(loadItems().filter(i => 
 export const updateItemInStore = (id: string, patch: Partial<Pick<CollectedItem, "note" | "capturedVars">>) =>
   save(loadItems().map(i => i.id === id ? { ...i, ...patch } : i));
 
-export const clearStore = () => localStorage.removeItem(KEY);
+export const clearStore = () => {
+  localStorage.removeItem(KEY);
+  syncToBackend([]).catch(() => {});
+};
 
 export const fromScrapeResult = (
   result: ScrapeResult,
