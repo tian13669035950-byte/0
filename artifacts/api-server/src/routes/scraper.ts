@@ -13,7 +13,7 @@ const CustomSelectorSchema = z.object({
 });
 
 const ScrapeStepSchema = z.object({
-  type: z.enum(["click", "listen", "type", "key", "select", "scroll", "hover", "navigate", "capture", "goback", "goforward", "reload", "wait", "screenshot", "rightclick", "doubleclick", "newtab", "switchtab", "closetab"]),
+  type: z.enum(["click", "listen", "type", "key", "select", "scroll", "hover", "navigate", "capture", "goback", "goforward", "reload", "wait", "screenshot", "rightclick", "doubleclick", "newtab", "switchtab", "closetab", "waitforvar"]),
   selector: z.string().optional(),
   waitMs: z.number().optional(),
   waitForPopupClose: z.boolean().optional(),
@@ -102,6 +102,7 @@ async function runScrapeSession(
   watchId?: string,
   proxyRaw?: string,
   headed?: boolean,
+  sharedVars?: Record<string, string>,
 ) {
   const startTime = Date.now();
   const proxy = parseProxy(proxyRaw);
@@ -131,8 +132,11 @@ async function runScrapeSession(
     let clickedElement: string | undefined;
     const vars: Record<string, string> = {};
 
+    // If this session is part of a parallel run, seed local vars from the shared pool
+    if (sharedVars) Object.assign(vars, sharedVars);
+
     const resolveVars = (str: string) =>
-      str.replace(/\$\{([^}]+)\}/g, (_, n) => vars[n.trim()] ?? "");
+      str.replace(/\$\{([^}]+)\}/g, (_, n) => vars[n.trim()] ?? sharedVars?.[n.trim()] ?? "");
 
     const effectiveSteps =
       options.steps && options.steps.length > 0
@@ -235,12 +239,32 @@ async function runScrapeSession(
 
           if (captured) {
             vars[varName] = captured;
+            if (sharedVars) sharedVars[varName] = captured; // share across parallel tracks
             emit({ t: "captured", varName, value: captured });
           } else {
             ok = false;
           }
           if (step.waitMs) await page.waitForTimeout(step.waitMs);
         } catch { ok = false; }
+
+      } else if (step.type === "waitforvar") {
+        // Block until another parallel track writes the named variable into the shared pool
+        const vn = step.varName?.trim();
+        if (vn && sharedVars) {
+          const timeout = step.listenTimeout ?? 60000;
+          const start = Date.now();
+          while (!sharedVars[vn] && Date.now() - start < timeout) {
+            await page.waitForTimeout(500);
+          }
+          if (sharedVars[vn]) {
+            vars[vn] = sharedVars[vn];
+            emit({ t: "captured", varName: vn, value: sharedVars[vn] });
+          } else {
+            ok = false; // timed out
+          }
+        } else {
+          ok = false;
+        }
 
       } else if (step.type === "type" && step.selector?.trim() && step.text) {
         const selector = step.selector.trim();
@@ -609,6 +633,9 @@ router.post("/parallel/stream", async (req, res) => {
   });
   watchIds.forEach((wid, idx) => write({ track: idx, t: "watch_ready", watchId: wid }));
 
+  // Shared variable pool — any track's "capture" writes here; any track's "waitforvar" reads here
+  const sharedVars: Record<string, string> = {};
+
   await Promise.all(
     parsed.data.tracks.map(async (track, idx) => {
       try {
@@ -619,6 +646,7 @@ router.post("/parallel/stream", async (req, res) => {
           watchIds[idx],
           track.proxy,
           track.headed,
+          sharedVars,
         );
         write({ track: idx, t: "result", ...result });
       } catch (err) {

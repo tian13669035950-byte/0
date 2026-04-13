@@ -65,6 +65,7 @@ const STEP_TYPES = [
   { type: "newtab",     label: "新建标签页", icon: Globe,            color: "indigo",  desc: "在同一浏览器内新开一个标签页，并切换到该标签" },
   { type: "switchtab",  label: "切换标签页", icon: ArrowLeftRight,   color: "sky",     desc: "切换到指定编号的标签页（从 0 开始）" },
   { type: "closetab",   label: "关闭标签页", icon: X,               color: "rose",    desc: "关闭当前标签页，自动切换回上一个标签" },
+  { type: "waitforvar", label: "等待跨轨变量", icon: Clock,          color: "amber",   desc: "在并行执行中等待另一个轨道捕获某个变量后再继续" },
 ] as const;
 
 type StepType = typeof STEP_TYPES[number]["type"];
@@ -91,7 +92,7 @@ const COMMON_KEYS = ["Enter", "Tab", "Escape", "Space", "ArrowDown", "ArrowUp", 
 // ─── Zod schemas ─────────────────────────────────────────────────────────────
 
 const stepSchema = z.object({
-  type: z.enum(["click", "listen", "type", "key", "select", "scroll", "hover", "navigate", "capture", "goback", "goforward", "reload", "wait", "screenshot", "rightclick", "doubleclick", "newtab", "switchtab", "closetab"]),
+  type: z.enum(["click", "listen", "type", "key", "select", "scroll", "hover", "navigate", "capture", "goback", "goforward", "reload", "wait", "screenshot", "rightclick", "doubleclick", "newtab", "switchtab", "closetab", "waitforvar"]),
   selector: z.string().optional(),
   waitMs: z.number().optional(),
   waitForPopupClose: z.boolean().optional(),
@@ -174,6 +175,7 @@ const defaults: Record<StepType, Partial<Step>> = {
   newtab:      { type: "newtab",      url: "", waitMs: 1500 },
   switchtab:   { type: "switchtab",   tabIndex: 0, waitMs: 500 },
   closetab:    { type: "closetab",    waitMs: 500 },
+  waitforvar:  { type: "waitforvar",  varName: "", listenTimeout: 60000 },
   type:        { type: "type",        selector: "", text: "" },
   key:         { type: "key",         key: "Enter", waitMs: 500 },
   select:      { type: "select",      selector: "", value: "" },
@@ -718,7 +720,7 @@ export default function Home() {
                     <Play className="h-4 w-4 text-primary" />操作步骤
                     {stepFields.length > 0 && <Badge variant="secondary" className="font-mono">{stepFields.length}</Badge>}
                   </CardTitle>
-                  <CardDescription className="text-xs">按顺序执行，共 19 种操作：点击、双击、右键、输入、按键、下拉、滚动、悬停、跳转、新建标签、切换标签、关闭标签、后退、前进、刷新、等待、监听、读取、截图</CardDescription>
+                  <CardDescription className="text-xs">按顺序执行，共 20 种操作：点击、双击、右键、输入、按键、下拉、滚动、悬停、跳转、新建标签、切换标签、关闭标签、后退、前进、刷新、等待、监听、读取、截图、等待跨轨变量</CardDescription>
                 </CardHeader>
                 <CardContent className="space-y-2">
                   {stepFields.length === 0 && (
@@ -849,6 +851,20 @@ export default function Home() {
                               <Input type="number" className="font-mono text-xs h-7"
                                 {...form.register(`steps.${index}.listenTimeout`, { valueAsNumber: true })} />
                             </Field>
+                          </>}
+
+                          {s?.type === "waitforvar" && <>
+                            <Field label="等待哪个变量名">
+                              <Input placeholder="例：邮箱链接 或 confirmUrl" className="text-xs h-7"
+                                {...form.register(`steps.${index}.varName`)} />
+                            </Field>
+                            <Field label="最长等待时间（毫秒）">
+                              <Input type="number" className="font-mono text-xs h-7"
+                                {...form.register(`steps.${index}.listenTimeout`, { valueAsNumber: true })} />
+                            </Field>
+                            <p className="text-xs text-muted-foreground bg-amber-50 border border-amber-200 rounded px-2 py-1.5">
+                              <strong>并行专用：</strong>暂停本轨道，直到其他轨道的「读取保存」步骤把该变量写入共享池，之后就可以用 <code className="font-mono">{"${变量名}"}</code> 引用它。
+                            </p>
                           </>}
 
                           {s?.type === "type" && <>
@@ -1444,7 +1460,7 @@ export default function Home() {
               <h3 className="text-lg font-medium text-foreground mb-2">搭好步骤，一键执行</h3>
               <p className="text-sm max-w-sm mb-6">点击"添加步骤"，选择要执行的操作类型，排好顺序，保存为方案，支持循环自动运行。</p>
               <div className="flex items-center gap-4 text-xs font-mono opacity-50">
-                <div className="flex items-center gap-1"><CheckCircle2 className="h-3 w-3" />19 种操作类型</div>
+                <div className="flex items-center gap-1"><CheckCircle2 className="h-3 w-3" />20 种操作类型</div>
                 <div className="flex items-center gap-1"><CheckCircle2 className="h-3 w-3" />保存复用</div>
                 <div className="flex items-center gap-1"><CheckCircle2 className="h-3 w-3" />支持循环</div>
               </div>
