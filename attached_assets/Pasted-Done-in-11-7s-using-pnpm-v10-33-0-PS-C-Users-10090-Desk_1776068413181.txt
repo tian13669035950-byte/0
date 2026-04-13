@@ -1,0 +1,26 @@
+Done in 11.7s using pnpm v10.33.0
+PS C:\Users\10090\Desktop\酒馆文件夹\新建文件夹 (4)> $env:PORT = "25879"; $env:BASE_PATH = "/"; pnpm --filter @workspace/scraper-tool run dev
+
+> @workspace/scraper-tool@0.0.0 dev C:\Users\10090\Desktop\酒馆文件夹\新建文件夹 (4)\artifacts\scraper-tool
+> vite --config vite.config.ts --host 0.0.0.0
+
+▲ [WARNING] Cannot find base config file "../../tsconfig.base.json" [tsconfig.json]
+
+    tsconfig.json:2:13:
+      2 │   "extends": "../../tsconfig.base.json",
+        ╵              ~~~~~~~~~~~~~~~~~~~~~~~~~~
+
+
+  VITE v7.3.1  ready in 501 ms
+
+  ➜  Local:   http://localhost:25879/
+  ➜  Network: http://192.168.37.14:25879/
+  ➜  press h + enter to show help
+(!) Failed to run dependency scan. Skipping dependency pre-bundling. TSConfckParseError: failed to resolve "extends":"../../tsconfig.base.json" in C:\Users\10090\Desktop\酒馆文件夹\新建文件夹 (4)\artifacts\scraper-tool\tsconfig.json
+    at resolveExtends (file:///C:/Users/10090/Desktop/%E9%85%92%E9%A6%86%E6%96%87%E4%BB%B6%E5%A4%B9/%E6%96%B0%E5%BB%BA%E6%96%87%E4%BB%B6%E5%A4%B9%20(4)/node_modules/.pnpm/vite@7.3.1_@types+node@25.3_847d3f1dfd8a5a4dca3b40dafc2c9d32/node_modules/vite/dist/node/chunks/config.js:5809:8)
+    at parseExtends (file:///C:/Users/10090/Desktop/%E9%85%92%E9%A6%86%E6%96%87%E4%BB%B6%E5%A4%B9/%E6%96%B0%E5%BB%BA%E6%96%87%E4%BB%B6%E5%A4%B9%20(4)/node_modules/.pnpm/vite@7.3.1_@types+node@25.3_847d3f1dfd8a5a4dca3b40dafc2c9d32/node_modules/vite/dist/node/chunks/config.js:5775:71)
+    at parse$13 (file:///C:/Users/10090/Desktop/%E9%85%92%E9%A6%86%E6%96%87%E4%BB%B6%E5%A4%B9/%E6%96%B0%E5%BB%BA%E6%96%87%E4%BB%B6%E5%A4%B9%20(4)/node_modules/.pnpm/vite@7.3.1_@types+node@25.3_847d3f1dfd8a5a4dca3b40dafc2c9d32/node_modules/vite/dist/node/chunks/config.js:5677:23)
+    at async loadTsconfigJsonForFile (file:///C:/Users/10090/Desktop/%E9%85%92%E9%A6%86%E6%96%87%E4%BB%B6%E5%A4%B9/%E6%96%B0%E5%BB%BA%E6%96%87%E4%BB%B6%E5%A4%B9%20(4)/node_modules/.pnpm/vite@7.3.1_@types+node@25.3_847d3f1dfd8a5a4dca3b40dafc2c9d32/node_modules/vite/dist/node/chunks/config.js:6286:37)
+    at async prepareEsbuildScanner (file:///C:/Users/10090/Desktop/%E9%85%92%E9%A6%86%E6%96%87%E4%BB%B6%E5%A4%B9/%E6%96%B0%E5%BB%BA%E6%96%87%E4%BB%B6%E5%A4%B9%20(4)/node_modules/.pnpm/vite@7.3.1_@types+node@25.3_847d3f1dfd8a5a4dca3b40dafc2c9d32/node_modules/vite/dist/node/chunks/config.js:31445:24)
+    at async scan (file:///C:/Users/10090/Desktop/%E9%85%92%E9%A6%86%E6%96%87%E4%BB%B6%E5%A4%B9/%E6%96%B0%E5%BB%BA%E6%96%87%E4%BB%B6%E5%A4%B9%20(4)/node_modules/.pnpm/vite@7.3.1_@types+node@25.3_847d3f1dfd8a5a4dca3b40dafc2c9d32/node_modules/vite/dist/node/chunks/config.js:31380:14)
+    at async file:///C:/Users/10090/Desktop/%E9%85%92%E9%A6%86%E6%96%87%E4%BB%B6%E5%A4%B9/%E6%96%B0%E5%BB%BA%E6%96%87%E4%BB%B6%E5%A4%B9%20(4)/node_modules/.pnpm/vite@7.3.1_@types+node@25.3_847d3f1dfd8a5a4dca3b40dafc2c9d32/node_modules/vite/dist/node/chunks/config.js:34111:15

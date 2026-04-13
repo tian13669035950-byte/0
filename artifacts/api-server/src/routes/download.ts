@@ -24,6 +24,7 @@ const SOURCE_PATHS = [
   "package.json",
   "pnpm-workspace.yaml",
   "pnpm-lock.yaml",
+  "tsconfig.base.json",
   "README.md",
 ];
 
