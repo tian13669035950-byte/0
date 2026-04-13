@@ -56,8 +56,13 @@ export type StreamEvent =
   | { t: "step_done"; i: number; ok: boolean }
   | { t: "captured"; varName: string; value: string }
   | { t: "navigated"; url: string }
+  | { t: "watch_ready"; watchId: string }
   | { t: "result"; [key: string]: unknown }
   | { t: "error"; message: string };
+
+// ─── Live-watch sessions (screenshot stream during execution) ─────────────────
+interface WatchSession { page: import("playwright-core").Page | null }
+const watchSessions = new Map<string, WatchSession>();
 
 interface ScrapeHistoryItem {
   id: string;
@@ -86,7 +91,8 @@ const UA =
 async function runScrapeSession(
   url: string,
   options: ScrapeOptions,
-  emit: (event: StreamEvent) => void
+  emit: (event: StreamEvent) => void,
+  watchId?: string
 ) {
   const startTime = Date.now();
   const browser = await chromium.launch({
@@ -99,6 +105,11 @@ async function runScrapeSession(
     const newCtx = () => browser.newContext({ userAgent: UA });
     let ctx = await newCtx();
     let page = await ctx.newPage();
+
+    // Register page so the live-watch SSE stream can grab screenshots
+    if (watchId && watchSessions.has(watchId)) {
+      watchSessions.get(watchId)!.page = page;
+    }
 
     await page.goto(url, { waitUntil: "domcontentloaded", timeout: 20000 });
     await page.waitForTimeout(1500);
@@ -173,6 +184,7 @@ async function runScrapeSession(
           await ctx.close();
           ctx = await newCtx();
           page = await ctx.newPage();
+          if (watchId && watchSessions.has(watchId)) watchSessions.get(watchId)!.page = page;
         }
         await page.goto(targetUrl, { waitUntil: "domcontentloaded", timeout: 20000 });
         await page.waitForTimeout(step.waitMs ?? 1500);
@@ -381,6 +393,42 @@ router.post("/scrape", async (req, res) => {
   }
 });
 
+// ─── GET /scrape/watch/:id  (SSE screenshot stream during execution) ──────────
+
+router.get("/scrape/watch/:id", async (req, res) => {
+  // Wait up to 8s for the session to be registered (browser startup lag)
+  const id = req.params.id;
+  const deadline = Date.now() + 8000;
+  while (!watchSessions.has(id) && Date.now() < deadline) {
+    await new Promise((r) => setTimeout(r, 100));
+  }
+  if (!watchSessions.has(id)) return res.status(404).json({ error: "Watch session not found" });
+
+  res.setHeader("Content-Type", "text/event-stream");
+  res.setHeader("Cache-Control", "no-cache");
+  res.setHeader("Connection", "keep-alive");
+  res.flushHeaders();
+
+  let alive = true;
+  const send = (obj: object) => {
+    if (!alive) return;
+    try { res.write(`data: ${JSON.stringify(obj)}\n\n`); } catch { alive = false; }
+  };
+
+  const loop = setInterval(async () => {
+    const session = watchSessions.get(id);
+    if (!session) { alive = false; clearInterval(loop); send({ type: "done" }); return; }
+    const page = session.page;
+    if (!page) return; // browser still starting up
+    try {
+      const shot = await page.screenshot({ type: "jpeg", quality: 70 });
+      send({ type: "screenshot", data: shot.toString("base64"), url: page.url() });
+    } catch { /* page navigating or closed */ }
+  }, 300);
+
+  req.on("close", () => { alive = false; clearInterval(loop); });
+});
+
 // ─── POST /scrape/stream  (NDJSON streaming, real-time step events) ───────────
 
 router.post("/scrape/stream", async (req, res) => {
@@ -392,17 +440,24 @@ router.post("/scrape/stream", async (req, res) => {
 
   res.setHeader("Content-Type", "application/x-ndjson; charset=utf-8");
   res.setHeader("Cache-Control", "no-cache");
-  res.setHeader("X-Accel-Buffering", "no"); // Disable nginx buffering
+  res.setHeader("X-Accel-Buffering", "no");
 
   const write = (event: StreamEvent) => {
     try { res.write(JSON.stringify(event) + "\n"); } catch { /* client disconnected */ }
   };
 
+  // Register watch session slot so the SSE stream can start connecting immediately
+  const watchId = randomUUID();
+  watchSessions.set(watchId, { page: null });
+  write({ t: "watch_ready", watchId });
+
   try {
-    const result = await runScrapeSession(parsed.data.url, parsed.data.options, write);
+    const result = await runScrapeSession(parsed.data.url, parsed.data.options, write, watchId);
     write({ t: "result", ...result });
   } catch (err) {
     write({ t: "error", message: err instanceof Error ? err.message : "Unknown error" });
+  } finally {
+    watchSessions.delete(watchId);
   }
   res.end();
 });

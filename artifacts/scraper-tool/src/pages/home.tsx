@@ -147,6 +147,11 @@ export default function Home() {
     doneMap: Record<number, boolean>;
     liveVars: Record<string, string>;
   } | null>(null);
+  const [watchId, setWatchId] = useState<string | null>(null);
+  const [watchOpen, setWatchOpen] = useState(false);
+  const [watchShot, setWatchShot] = useState("");
+  const [watchUrl, setWatchUrl] = useState("");
+  const watchEsRef = useRef<EventSource | null>(null);
 
   // ── Recorder state ────────────────────────────────────────────────────────
   const [isRecording, setIsRecording] = useState(false);
@@ -359,7 +364,9 @@ export default function Home() {
     const result = await sendInteract({ action: "click", x, y }) as { step?: RecordedStep; url?: string } | null;
     if (result?.step) {
       const newId = String(++recStepIdRef.current);
-      setRecordedSteps((s) => [...s, { id: newId, ...result.step! }]);
+      // eslint-disable-next-line @typescript-eslint/no-unused-vars
+      const { id: _ignored, ...stepRest } = result.step as RecordedStep & { id?: string };
+      setRecordedSteps((s) => [...s, { id: newId, ...stepRest }]);
     }
     if (result?.url) setSessionCurrentUrl(result.url);
   }, [sendInteract]);
@@ -411,24 +418,49 @@ export default function Home() {
     toast({ title: `已添加 ${recordedSteps.length} 个步骤`, description: "可在左侧步骤列表中查看和调整" });
   }, [recordedSteps, appendStep, toast]);
 
+  // ── Live watch helpers ────────────────────────────────────────────────────
+
+  const openWatch = useCallback((id: string) => {
+    if (watchEsRef.current) { watchEsRef.current.close(); watchEsRef.current = null; }
+    setWatchShot(""); setWatchUrl(""); setWatchOpen(true);
+    const es = new EventSource(`/api/scrape/watch/${id}`);
+    watchEsRef.current = es;
+    es.onmessage = (e) => {
+      const d = JSON.parse(e.data) as { type: string; data?: string; url?: string };
+      if (d.type === "screenshot" && d.data) setWatchShot(`data:image/jpeg;base64,${d.data}`);
+      if (d.url) setWatchUrl(d.url);
+      if (d.type === "done") { es.close(); watchEsRef.current = null; }
+    };
+    es.onerror = () => { es.close(); watchEsRef.current = null; };
+  }, []);
+
+  const closeWatch = useCallback(() => {
+    if (watchEsRef.current) { watchEsRef.current.close(); watchEsRef.current = null; }
+    setWatchOpen(false);
+  }, []);
+
+  const handleExecEv = useCallback((ev: { t: string; [k: string]: unknown }) => {
+    if (ev.t === "step_start") setExecProgress(p => p && ({ ...p, activeIdx: ev.i as number }));
+    if (ev.t === "step_done") setExecProgress(p => p && ({ ...p, activeIdx: null, doneMap: { ...p.doneMap, [ev.i as number]: ev.ok as boolean } }));
+    if (ev.t === "captured") setExecProgress(p => p && ({ ...p, liveVars: { ...p.liveVars, [ev.varName as string]: ev.value as string } }));
+    if (ev.t === "watch_ready" && ev.watchId) { setWatchId(ev.watchId as string); }
+  }, []);
+
   const runSingle = useCallback(async () => {
     setSinglePending(true);
     setExecProgress({ activeIdx: null, doneMap: {}, liveVars: {} });
+    setWatchId(null); setWatchShot(""); closeWatch();
     try {
-      const d = await streamScrape(buildRequest(form.getValues()), (ev) => {
-        if (ev.t === "step_start") setExecProgress(p => p && ({ ...p, activeIdx: ev.i as number }));
-        if (ev.t === "step_done") setExecProgress(p => p && ({ ...p, activeIdx: null, doneMap: { ...p.doneMap, [ev.i as number]: ev.ok as boolean } }));
-        if (ev.t === "captured") setExecProgress(p => p && ({ ...p, liveVars: { ...p.liveVars, [ev.varName as string]: ev.value as string } }));
-      });
+      const d = await streamScrape(buildRequest(form.getValues()), handleExecEv);
       addSnap(d);
       toast({ title: "执行完成", description: `耗时 ${d.duration}ms` });
     } catch (e: unknown) {
       toast({ title: "执行失败", description: e instanceof Error ? e.message : "未知错误", variant: "destructive" });
     } finally {
       setSinglePending(false);
-      setTimeout(() => setExecProgress(null), 4000);
+      setTimeout(() => { setExecProgress(null); setWatchId(null); closeWatch(); }, 4000);
     }
-  }, [form, streamScrape, buildRequest, addSnap, toast]);
+  }, [form, streamScrape, buildRequest, addSnap, toast, handleExecEv, closeWatch]);
 
   const runLoop = useCallback(async () => {
     const v = form.getValues(); const total = v.loopCount; const delay = v.loopDelayMs;
@@ -438,12 +470,9 @@ export default function Home() {
       if (stopLoopRef.current) break;
       setLoopProgress({ current: i, total });
       setExecProgress({ activeIdx: null, doneMap: {}, liveVars: {} });
+      setWatchId(null);
       try {
-        const d = await streamScrape(buildRequest(v), (ev) => {
-          if (ev.t === "step_start") setExecProgress(p => p && ({ ...p, activeIdx: ev.i as number }));
-          if (ev.t === "step_done") setExecProgress(p => p && ({ ...p, activeIdx: null, doneMap: { ...p.doneMap, [ev.i as number]: ev.ok as boolean } }));
-          if (ev.t === "captured") setExecProgress(p => p && ({ ...p, liveVars: { ...p.liveVars, [ev.varName as string]: ev.value as string } }));
-        });
+        const d = await streamScrape(buildRequest(v), handleExecEv);
         addSnap(d, i, total); ok++;
       } catch (e: unknown) {
         fail++;
@@ -452,9 +481,9 @@ export default function Home() {
       if (i < total && !stopLoopRef.current) await sleep(delay);
     }
     setLoopRunning(false); setLoopProgress(null);
-    setExecProgress(null);
+    setExecProgress(null); setWatchId(null); closeWatch();
     toast({ title: stopLoopRef.current ? "循环已停止" : "循环完成", description: `成功 ${ok} 次${fail > 0 ? `，失败 ${fail} 次` : ""}` });
-  }, [form, streamScrape, buildRequest, addSnap, toast]);
+  }, [form, streamScrape, buildRequest, addSnap, toast, handleExecEv, closeWatch]);
 
   const isRunning = loopRunning || singlePending;
   const loopEnabled = form.watch("loopEnabled");
@@ -892,6 +921,22 @@ export default function Home() {
             </Card>
           )}
 
+          {/* Live watch button — appears once backend registers the browser */}
+          {isRunning && watchId && (
+            <div className="flex items-center gap-3 px-4 py-2.5 bg-violet-50 border border-violet-200 rounded-lg animate-in fade-in">
+              <span className="relative flex h-2.5 w-2.5 shrink-0">
+                <span className="animate-ping absolute inline-flex h-full w-full rounded-full bg-violet-400 opacity-75" />
+                <span className="relative inline-flex rounded-full h-2.5 w-2.5 bg-violet-500" />
+              </span>
+              <span className="text-sm text-violet-700 font-medium flex-1">后台浏览器正在执行</span>
+              <Button type="button" size="sm" variant="outline"
+                className="h-7 gap-1.5 text-xs border-violet-300 text-violet-700 hover:bg-violet-100"
+                onClick={() => openWatch(watchId)}>
+                <Eye className="h-3.5 w-3.5" />实时查看
+              </Button>
+            </div>
+          )}
+
           {/* Live execution vars — shown during single run or loop */}
           {execProgress && Object.keys(execProgress.liveVars).length > 0 && (
             <Card className="border-teal-300 bg-teal-50/60 shadow-sm animate-in fade-in">
@@ -1112,6 +1157,48 @@ export default function Home() {
       </div>
     </div>
 
+    {/* ── Live Watch Modal ─────────────────────────────────────────────────── */}
+    {watchOpen && (
+      <div className="fixed inset-0 z-40 flex flex-col bg-black/80 backdrop-blur-sm animate-in fade-in">
+        {/* Top bar */}
+        <div className="flex items-center gap-2 px-4 py-2.5 border-b border-zinc-700 bg-zinc-900 shrink-0">
+          <span className="relative flex h-2.5 w-2.5 shrink-0">
+            <span className="animate-ping absolute inline-flex h-full w-full rounded-full bg-violet-400 opacity-75" />
+            <span className="relative inline-flex rounded-full h-2.5 w-2.5 bg-violet-500" />
+          </span>
+          <span className="text-sm font-semibold text-violet-300">实时浏览器视图</span>
+          {watchUrl && (
+            <span className="flex-1 text-[11px] font-mono text-zinc-400 truncate">{watchUrl}</span>
+          )}
+          <span className="text-xs text-zinc-500 hidden sm:inline">只读 · 不影响执行</span>
+          <Button type="button" size="sm" variant="ghost"
+            className="h-7 gap-1.5 text-xs text-zinc-400 hover:text-zinc-100 ml-auto"
+            onClick={closeWatch}>
+            <X className="h-4 w-4" />关闭
+          </Button>
+        </div>
+
+        {/* Screenshot */}
+        <div className="flex-1 min-h-0 flex items-center justify-center bg-zinc-950 p-4">
+          {!watchShot ? (
+            <div className="flex flex-col items-center gap-3">
+              <Loader2 className="h-8 w-8 animate-spin text-violet-400" />
+              <span className="text-sm text-zinc-400">等待浏览器截图…</span>
+            </div>
+          ) : (
+            <div className="relative w-full" style={{ aspectRatio: "16/9", maxHeight: "100%", maxWidth: "calc((100vh - 120px) * 16 / 9)" }}>
+              <img
+                src={watchShot}
+                alt="后台浏览器"
+                className="w-full h-full block rounded-sm shadow-xl"
+                draggable={false}
+              />
+            </div>
+          )}
+        </div>
+      </div>
+    )}
+
     {/* ── Visual Recorder Overlay ─────────────────────────────────────────── */}
     {isRecording && (
       <div className="fixed inset-0 z-50 flex flex-col bg-background/95 backdrop-blur-sm animate-in fade-in">
@@ -1324,7 +1411,7 @@ export default function Home() {
                       应用 {recordedSteps.length} 个步骤
                     </Button>
                   ) : (
-                    <Button type="button" variant="outline" className="w-full h-8 text-sm" onClick={stopRecording}>
+                    <Button type="button" variant="outline" className="w-full h-8 text-sm" onClick={() => stopRecording()}>
                       取消录制
                     </Button>
                   )}
