@@ -133,6 +133,96 @@ router.get("/record/session/:id/stream", async (req, res) => {
   req.on("close", () => { alive = false; clearInterval(loop); });
 });
 
+// ─── CSS selector / label helpers (run inside page context) ──────────────────
+
+const GET_SELECTOR = `(el) => {
+  if (!el || el.nodeType !== 1) return '';
+  if (el === document.body) return 'body';
+  const parts = [];
+  let cur = el;
+  for (let d = 0; d < 8; d++) {
+    if (!cur || cur === document.documentElement) break;
+    if (cur.id && /^[a-zA-Z][\\w:-]*$/.test(cur.id)) {
+      parts.unshift('#' + CSS.escape(cur.id));
+      break;
+    }
+    let tag = cur.tagName.toLowerCase();
+    const parent = cur.parentElement;
+    if (parent) {
+      const sibs = Array.from(parent.children).filter(c => c.tagName === cur.tagName);
+      if (sibs.length > 1) tag += ':nth-of-type(' + (sibs.indexOf(cur) + 1) + ')';
+    }
+    parts.unshift(tag);
+    cur = cur.parentElement;
+  }
+  return parts.join(' > ');
+}`;
+
+const GET_LABEL = `(el) => {
+  return (
+    el.getAttribute('aria-label') ||
+    el.getAttribute('title') ||
+    el.getAttribute('placeholder') ||
+    el.getAttribute('name') ||
+    el.textContent?.trim().slice(0, 60) || ''
+  ).replace(/\\s+/g, ' ').trim();
+}`;
+
+// ─── POST /api/record/session/:id/click  (click at coords, auto-detect selector)
+router.post("/record/session/:id/click", async (req, res) => {
+  const session = sessions.get(req.params.id);
+  if (!session) return res.status(404).json({ error: "Session not found" });
+  session.lastActivity = Date.now();
+
+  const { action = "click", x, y } = req.body as {
+    action?: "click" | "doubleclick" | "rightclick" | "hover";
+    x: number; // normalized 0-1
+    y: number;
+  };
+
+  const page = session.page;
+  const px = Math.round(x * VIEWPORT.width);
+  const py = Math.round(y * VIEWPORT.height);
+
+  try {
+    // Get element info BEFORE acting
+    const info = await page.evaluate(
+      ({ selectorFn, labelFn, px, py }) => {
+        const el = document.elementFromPoint(px, py) as Element | null;
+        if (!el) return null;
+        const getSelector = new Function("el", `return (${selectorFn})(el);`) as (el: Element) => string;
+        const getLabel    = new Function("el", `return (${labelFn})(el);`)    as (el: Element) => string;
+        return { selector: getSelector(el), label: getLabel(el) };
+      },
+      { selectorFn: GET_SELECTOR, labelFn: GET_LABEL, px, py }
+    );
+
+    const prevUrl = page.url();
+
+    switch (action) {
+      case "doubleclick": await page.mouse.dblclick(px, py); break;
+      case "rightclick":  await page.mouse.click(px, py, { button: "right" }); break;
+      case "hover":       await page.mouse.move(px, py); break;
+      default:            await page.mouse.click(px, py);
+    }
+
+    await page.waitForTimeout(400);
+    const newUrl = page.url();
+    if (newUrl !== session.currentUrl) session.currentUrl = newUrl;
+
+    const step: RecordedStep = {
+      type: action,
+      selector: info?.selector ?? "",
+      label: info?.label ?? "",
+      ...(newUrl !== prevUrl ? { navigatedTo: newUrl } : {}),
+    };
+    session.steps.push(step);
+    res.json({ step, url: newUrl, tabCount: session.tabs.length });
+  } catch (e: unknown) {
+    res.status(500).json({ error: e instanceof Error ? e.message : String(e) });
+  }
+});
+
 // ─── POST /api/record/session/:id/step  (execute + record a step) ─────────────
 router.post("/record/session/:id/step", async (req, res) => {
   const session = sessions.get(req.params.id);

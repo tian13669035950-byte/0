@@ -423,6 +423,34 @@ export default function Home() {
     }
   }, [form, toast, stopRecording]);
 
+  // Step types that use "click on page to pick element" mode
+  const CLICK_PICK_TYPES = ["click", "doubleclick", "rightclick", "hover"] as const;
+  type ClickPickType = typeof CLICK_PICK_TYPES[number];
+
+  // ── Click at coords (auto-detects CSS selector) ──────────────────────────
+  const sendClickAtCoords = useCallback(async (action: ClickPickType, x: number, y: number) => {
+    if (!sessionId) return;
+    setRecStepPending(true);
+    try {
+      const resp = await fetch(`/api/record/session/${sessionId}/click`, {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({ action, x, y }),
+      });
+      if (!resp.ok) throw new Error(`HTTP ${resp.status}`);
+      const result = await resp.json() as { step: RecordedStep; url: string; tabCount: number };
+      const newId = String(++recStepIdRef.current);
+      setRecordedSteps(s => [...s, { id: newId, ...result.step }]);
+      if (result.url) setSessionCurrentUrl(result.url);
+      if (result.tabCount) setRecTabCount(result.tabCount);
+      // Keep the same action selected so user can keep clicking more elements
+    } catch (err) {
+      toast({ title: "操作失败", description: String(err), variant: "destructive" });
+    } finally {
+      setRecStepPending(false);
+    }
+  }, [sessionId, toast]);
+
   // ── Send a step to backend (execute + record) ────────────────────────────
   const sendStep = useCallback(async (stepPayload: Omit<RecordedStep, "id">) => {
     if (!sessionId) return;
@@ -1358,8 +1386,11 @@ export default function Home() {
       const fv = recFormValues;
       const setFv = (k: string, v: string | number) => setRecFormValues(prev => ({ ...prev, [k]: v }));
 
-      // Fields shown per step type
-      const needsSelector = ["click","doubleclick","rightclick","scroll","hover","listen","capture","type","select"].includes(recFormType ?? "");
+      // "Click on page" mode — overlay becomes clickable, selector auto-detected
+      const isClickPickMode = recFormType !== null && (["click","doubleclick","rightclick","hover"] as string[]).includes(recFormType);
+
+      // Fields shown per step type (non-click-pick types only)
+      const needsSelector = !isClickPickMode && ["scroll","listen","capture","type","select"].includes(recFormType ?? "");
       const needsUrl      = ["navigate","newtab"].includes(recFormType ?? "");
       const needsText     = recFormType === "type";
       const needsKey      = recFormType === "key";
@@ -1460,12 +1491,30 @@ export default function Home() {
                       style={{ imageRendering: "auto" }}
                       draggable={false}
                     />
-                    <div ref={overlayRef} className="absolute inset-0" />
+                    {/* Overlay — clickable only in click-pick mode */}
+                    <div
+                      ref={overlayRef}
+                      className={`absolute inset-0 ${isClickPickMode ? "cursor-crosshair" : ""}`}
+                      onClick={isClickPickMode && !recStepPending ? (e) => {
+                        const rect = overlayRef.current?.getBoundingClientRect();
+                        if (!rect) return;
+                        const x = (e.clientX - rect.left) / rect.width;
+                        const y = (e.clientY - rect.top) / rect.height;
+                        sendClickAtCoords(recFormType as "click"|"doubleclick"|"rightclick"|"hover", x, y);
+                      } : undefined}
+                    />
                     {/* Overlay hint */}
                     <div className="absolute bottom-2 left-2 right-2 flex justify-center pointer-events-none">
-                      <span className="text-[10px] bg-black/60 text-white/70 rounded px-2 py-0.5">
-                        实时预览 — 点击下方按钮操作网页
-                      </span>
+                      {isClickPickMode ? (
+                        <span className="text-[10px] bg-blue-600/90 text-white rounded px-2 py-0.5 flex items-center gap-1">
+                          <span className="inline-block w-1.5 h-1.5 rounded-full bg-white animate-pulse" />
+                          {recStepPending ? "执行中…" : `点击页面上的元素来执行「${recStepDef?.label}」`}
+                        </span>
+                      ) : (
+                        <span className="text-[10px] bg-black/60 text-white/70 rounded px-2 py-0.5">
+                          实时预览 — 点击下方按钮操作网页
+                        </span>
+                      )}
                     </div>
                   </div>
                 )}
@@ -1510,12 +1559,25 @@ export default function Home() {
 
                 {/* Mini-form — appears when a step type is selected */}
                 {recFormType && (
-                  <div className="border-t border-zinc-700 px-3 py-2.5 bg-zinc-850 space-y-2 animate-in slide-in-from-bottom-2 duration-150">
+                  <div className="border-t border-zinc-700 px-3 py-2.5 space-y-2 animate-in slide-in-from-bottom-2 duration-150" style={{ backgroundColor: "#1a1a2e" }}>
                     <div className="flex items-center gap-2 mb-1">
                       {RecStepIcon && <RecStepIcon className="h-3.5 w-3.5 text-zinc-300" />}
                       <span className="text-xs font-semibold text-zinc-200">{recStepDef?.label}</span>
-                      <span className="text-[10px] text-zinc-500 ml-1">{recStepDef?.desc}</span>
+                      <button type="button" onClick={() => { setRecFormType(null); setRecFormValues({}); }}
+                        className="ml-auto text-[10px] text-zinc-500 hover:text-zinc-300 transition-colors px-2 py-0.5 rounded bg-zinc-800 border border-zinc-700">
+                        取消
+                      </button>
                     </div>
+
+                    {/* Click-pick mode: just show instruction, no form fields */}
+                    {isClickPickMode && (
+                      <div className="flex items-center gap-2 py-1.5 px-2 rounded-md bg-blue-900/40 border border-blue-700/50">
+                        <span className="inline-block w-2 h-2 rounded-full bg-blue-400 animate-pulse shrink-0" />
+                        <span className="text-xs text-blue-200">
+                          直接点击上方截图中的目标元素，CSS 选择器自动识别
+                        </span>
+                      </div>
+                    )}
 
                     {needsSelector && (
                       <div>
@@ -1625,7 +1687,7 @@ export default function Home() {
                       </div>
                     )}
                     {/* waitMs — shown for all types except ones that don't need it */}
-                    {!["listen","capture"].includes(recFormType) && (
+                    {!isClickPickMode && !["listen","capture"].includes(recFormType) && (
                       <div className="flex items-center gap-2">
                         <label className="text-[10px] text-zinc-400 shrink-0">执行后等待</label>
                         <input
@@ -1639,26 +1701,22 @@ export default function Home() {
                       </div>
                     )}
 
-                    <div className="flex gap-2 pt-0.5">
-                      <button
-                        type="button"
-                        disabled={recStepPending}
-                        onClick={handleExecute}
-                        className="flex-1 flex items-center justify-center gap-1.5 py-1.5 rounded-md text-xs font-semibold bg-blue-600 text-white hover:bg-blue-500 border border-blue-500 transition-colors disabled:opacity-50"
-                      >
-                        {recStepPending
-                          ? <><Loader2 className="h-3.5 w-3.5 animate-spin" />执行中…</>
-                          : <><Play className="h-3.5 w-3.5" />执行并记录</>
-                        }
-                      </button>
-                      <button
-                        type="button"
-                        onClick={() => { setRecFormType(null); setRecFormValues({}); }}
-                        className="px-3 py-1.5 rounded-md text-xs text-zinc-400 hover:text-zinc-200 bg-zinc-800 border border-zinc-600 hover:bg-zinc-700 transition-colors"
-                      >
-                        取消
-                      </button>
-                    </div>
+                    {/* Execute button — only for form-based types */}
+                    {!isClickPickMode && (
+                      <div className="flex gap-2 pt-0.5">
+                        <button
+                          type="button"
+                          disabled={recStepPending}
+                          onClick={handleExecute}
+                          className="flex-1 flex items-center justify-center gap-1.5 py-1.5 rounded-md text-xs font-semibold bg-blue-600 text-white hover:bg-blue-500 border border-blue-500 transition-colors disabled:opacity-50"
+                        >
+                          {recStepPending
+                            ? <><Loader2 className="h-3.5 w-3.5 animate-spin" />执行中…</>
+                            : <><Play className="h-3.5 w-3.5" />执行并记录</>
+                          }
+                        </button>
+                      </div>
+                    )}
                   </div>
                 )}
               </div>
