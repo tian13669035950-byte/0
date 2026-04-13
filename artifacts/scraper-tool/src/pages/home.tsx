@@ -151,10 +151,14 @@ export default function Home() {
   // ── Recorder state ────────────────────────────────────────────────────────
   const [isRecording, setIsRecording] = useState(false);
   const [recordedSteps, setRecordedSteps] = useState<RecordedStep[]>([]);
-  const [iframeSrc, setIframeSrc] = useState("");
-  const [iframeReady, setIframeReady] = useState(false);
+  const [sessionId, setSessionId] = useState<string | null>(null);
+  const [screenshotUrl, setScreenshotUrl] = useState("");
+  const [sessionCurrentUrl, setSessionCurrentUrl] = useState("");
+  const [sessionLoading, setSessionLoading] = useState(false);
+  const [typeText, setTypeText] = useState("");
   const [panelCollapsed, setPanelCollapsed] = useState(false);
-  const iframeRef = useRef<HTMLIFrameElement>(null);
+  const overlayRef = useRef<HTMLDivElement>(null);
+  const esRef = useRef<EventSource | null>(null);
   const recStepIdRef = useRef(0);
 
   const form = useForm<FormValues>({
@@ -242,48 +246,107 @@ export default function Home() {
   }, []);
 
   // ── Recorder handlers ─────────────────────────────────────────────────────
-  useEffect(() => {
-    if (!isRecording) return;
-    const handler = (e: MessageEvent) => {
-      if (!e.data?.__recorder) return;
-      const ev = e.data;
-      if (ev.type === "_ready") {
-        setIframeReady(true);
-        return;
-      }
-      const newId = String(++recStepIdRef.current);
-      if (ev.type === "click") {
-        setRecordedSteps((s) => [...s, { id: newId, type: "click", selector: ev.selector ?? "", label: ev.label }]);
-      } else if (ev.type === "navigate") {
-        // Record as a click step (clicking the link) and navigate the iframe
-        setRecordedSteps((s) => [...s, { id: newId, type: "click", selector: ev.selector ?? "", label: ev.label, navigatedTo: ev.href }]);
-        const proxied = `/api/record/proxy?url=${encodeURIComponent(ev.href)}`;
-        setIframeSrc(proxied);
-        setIframeReady(false);
-      } else if (ev.type === "type") {
-        setRecordedSteps((s) => [...s, { id: newId, type: "type", selector: ev.selector ?? "", text: ev.text, label: ev.label }]);
-      } else if (ev.type === "select") {
-        setRecordedSteps((s) => [...s, { id: newId, type: "select", selector: ev.selector ?? "", value: ev.value, label: ev.label }]);
-      }
-    };
-    window.addEventListener("message", handler);
-    return () => window.removeEventListener("message", handler);
-  }, [isRecording]);
 
-  const startRecording = useCallback(() => {
+  const stopRecording = useCallback((sid?: string | null) => {
+    const id = sid ?? sessionId;
+    if (id) {
+      fetch(`/api/record/session/${id}`, { method: "DELETE" }).catch(() => {});
+    }
+    if (esRef.current) { esRef.current.close(); esRef.current = null; }
+    setIsRecording(false);
+    setSessionId(null);
+    setScreenshotUrl("");
+    setSessionCurrentUrl("");
+    setSessionLoading(false);
+    setTypeText("");
+  }, [sessionId]);
+
+  const startRecording = useCallback(async () => {
     const url = form.getValues("url");
     if (!url?.trim() || url === "https://example.com") {
       toast({ title: "请先填写目标网址", variant: "destructive" });
       return;
     }
     setRecordedSteps([]);
-    setIframeReady(false);
     recStepIdRef.current = 0;
-    setIframeSrc(`/api/record/proxy?url=${encodeURIComponent(url.trim())}`);
+    setScreenshotUrl("");
+    setSessionLoading(true);
     setIsRecording(true);
-  }, [form, toast]);
 
-  const stopRecording = useCallback(() => setIsRecording(false), []);
+    try {
+      const resp = await fetch("/api/record/session/start", {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({ url: url.trim() }),
+      });
+      if (!resp.ok) throw new Error(await resp.text());
+      const { sessionId: sid, url: finalUrl } = await resp.json() as { sessionId: string; url: string };
+      setSessionId(sid);
+      setSessionCurrentUrl(finalUrl);
+      setSessionLoading(false);
+
+      // Open SSE stream for screenshots
+      const es = new EventSource(`/api/record/session/${sid}/stream`);
+      esRef.current = es;
+      es.onmessage = (e) => {
+        const data = JSON.parse(e.data) as { type: string; data?: string; url?: string };
+        if (data.type === "screenshot" && data.data) {
+          setScreenshotUrl(`data:image/jpeg;base64,${data.data}`);
+        } else if (data.type === "navigated" && data.url) {
+          setSessionCurrentUrl(data.url);
+        }
+      };
+      es.onerror = () => { es.close(); esRef.current = null; };
+    } catch (err) {
+      toast({ title: "启动录制失败", description: String(err), variant: "destructive" });
+      stopRecording(null);
+    }
+  }, [form, toast, stopRecording]);
+
+  // Interact helpers
+  const sendInteract = useCallback(async (body: object) => {
+    if (!sessionId) return null;
+    const resp = await fetch(`/api/record/session/${sessionId}/interact`, {
+      method: "POST",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify(body),
+    });
+    return resp.ok ? resp.json() : null;
+  }, [sessionId]);
+
+  const handleOverlayClick = useCallback(async (e: React.MouseEvent<HTMLDivElement>) => {
+    const rect = overlayRef.current?.getBoundingClientRect();
+    if (!rect) return;
+    const x = (e.clientX - rect.left) / rect.width;
+    const y = (e.clientY - rect.top) / rect.height;
+    const result = await sendInteract({ action: "click", x, y }) as { step?: RecordedStep; url?: string } | null;
+    if (result?.step) {
+      const newId = String(++recStepIdRef.current);
+      setRecordedSteps((s) => [...s, { id: newId, ...result.step! }]);
+    }
+    if (result?.url) setSessionCurrentUrl(result.url);
+  }, [sendInteract]);
+
+  const handleOverlayScroll = useCallback((e: React.WheelEvent<HTMLDivElement>) => {
+    const rect = overlayRef.current?.getBoundingClientRect();
+    if (!rect) return;
+    const x = (e.clientX - rect.left) / rect.width;
+    const y = (e.clientY - rect.top) / rect.height;
+    sendInteract({ action: "scroll", x, y, deltaY: e.deltaY > 0 ? 250 : -250 });
+  }, [sendInteract]);
+
+  const sendKey = useCallback((key: string) => {
+    sendInteract({ action: "key", key }).then((r: { url?: string } | null) => {
+      if (r?.url) setSessionCurrentUrl(r.url);
+    });
+  }, [sendInteract]);
+
+  const sendType = useCallback(() => {
+    const t = typeText.trim();
+    if (!t) return;
+    sendInteract({ action: "type", text: t });
+    setTypeText("");
+  }, [sendInteract, typeText]);
 
   const applyRecordedSteps = useCallback(() => {
     recordedSteps.forEach((rs) => {
@@ -1005,35 +1068,99 @@ export default function Home() {
           <div className="flex-1 flex items-center gap-1.5 min-w-0">
             <Link2 className="h-3 w-3 text-muted-foreground shrink-0 hidden sm:block" />
             <span className="text-[10px] sm:text-xs text-muted-foreground font-mono truncate">
-              {decodeURIComponent(iframeSrc.replace("/api/record/proxy?url=", "")).split("?")[0]}
+              {sessionCurrentUrl || "连接中…"}
             </span>
           </div>
-          {!iframeReady && (
+          {sessionLoading && (
             <div className="flex items-center gap-1 text-xs text-muted-foreground shrink-0">
               <Loader2 className="h-3 w-3 animate-spin" />
-              <span className="hidden sm:inline">加载中…</span>
+              <span className="hidden sm:inline">启动浏览器…</span>
             </div>
           )}
-          <Button type="button" variant="ghost" size="sm" className="h-7 w-7 p-0 sm:w-auto sm:px-3 sm:gap-1.5 text-muted-foreground shrink-0" onClick={stopRecording}>
+          <Button type="button" variant="ghost" size="sm" className="h-7 w-7 p-0 sm:w-auto sm:px-3 sm:gap-1.5 text-muted-foreground shrink-0" onClick={() => stopRecording()}>
             <X className="h-4 w-4" /><span className="hidden sm:inline">关闭</span>
           </Button>
-          <Button type="button" variant="destructive" size="sm" className="h-7 px-2 sm:px-3 gap-1.5 shrink-0 text-xs" onClick={stopRecording}>
+          <Button type="button" variant="destructive" size="sm" className="h-7 px-2 sm:px-3 gap-1.5 shrink-0 text-xs" onClick={() => stopRecording()}>
             <StopCircle className="h-3.5 w-3.5" /><span className="hidden xs:inline">停止</span>
           </Button>
         </div>
 
-        {/* Main content: browser iframe + step log */}
+        {/* Main content: remote browser + step log */}
         <div className="flex flex-col md:flex-row flex-1 overflow-hidden">
-          {/* iframe */}
-          <div className="flex-1 relative bg-white min-h-0" style={{ minHeight: 0 }}>
-            <iframe
-              ref={iframeRef}
-              src={iframeSrc}
-              className="w-full h-full border-0"
-              style={{ minHeight: "40vh" }}
-              sandbox="allow-scripts allow-same-origin allow-forms allow-popups allow-popups-to-escape-sandbox"
-              title="录制浏览器"
-            />
+          {/* Remote browser canvas */}
+          <div className="flex-1 relative bg-black min-h-0 flex flex-col" style={{ minHeight: 0 }}>
+            {/* Screenshot area with click/scroll overlay */}
+            <div className="relative flex-1 min-h-0" style={{ aspectRatio: "16/9", maxHeight: "calc(100% - 88px)" }}>
+              {sessionLoading || !screenshotUrl ? (
+                <div className="absolute inset-0 flex flex-col items-center justify-center gap-3 bg-zinc-900">
+                  <Loader2 className="h-8 w-8 animate-spin text-white/50" />
+                  <span className="text-sm text-white/50">正在启动浏览器…</span>
+                </div>
+              ) : (
+                <img
+                  src={screenshotUrl}
+                  alt="远程浏览器"
+                  className="absolute inset-0 w-full h-full"
+                  style={{ objectFit: "fill", imageRendering: "auto" }}
+                  draggable={false}
+                />
+              )}
+              {/* Invisible overlay — captures clicks and scrolls */}
+              <div
+                ref={overlayRef}
+                className="absolute inset-0 cursor-crosshair"
+                onClick={handleOverlayClick}
+                onWheel={handleOverlayScroll}
+              />
+            </div>
+
+            {/* Keyboard / type bar */}
+            <div className="shrink-0 bg-zinc-900 border-t border-zinc-700 px-2 py-1.5 space-y-1.5">
+              {/* Common keys */}
+              <div className="flex flex-wrap gap-1">
+                {[
+                  { label: "⏎ Enter",  key: "Enter" },
+                  { label: "⇥ Tab",    key: "Tab" },
+                  { label: "Esc",      key: "Escape" },
+                  { label: "⌫",        key: "Backspace" },
+                  { label: "↑",        key: "ArrowUp" },
+                  { label: "↓",        key: "ArrowDown" },
+                  { label: "←",        key: "ArrowLeft" },
+                  { label: "→",        key: "ArrowRight" },
+                  { label: "PgDn",     key: "PageDown" },
+                  { label: "PgUp",     key: "PageUp" },
+                ].map(({ label, key }) => (
+                  <button
+                    key={key}
+                    type="button"
+                    onClick={() => sendKey(key)}
+                    className="px-2 py-0.5 rounded text-[11px] font-mono bg-zinc-700 text-zinc-200 hover:bg-zinc-600 active:bg-zinc-500 border border-zinc-600 transition-colors"
+                  >
+                    {label}
+                  </button>
+                ))}
+              </div>
+              {/* Type input */}
+              <div className="flex gap-1.5">
+                <input
+                  type="text"
+                  value={typeText}
+                  onChange={e => setTypeText(e.target.value)}
+                  onKeyDown={e => {
+                    if (e.key === "Enter") { e.preventDefault(); sendType(); }
+                  }}
+                  placeholder="输入文字 → 回车发送"
+                  className="flex-1 min-w-0 px-2 py-1 text-xs rounded bg-zinc-800 text-zinc-100 border border-zinc-600 placeholder:text-zinc-500 focus:outline-none focus:border-zinc-400"
+                />
+                <button
+                  type="button"
+                  onClick={sendType}
+                  className="px-3 py-1 text-xs rounded bg-zinc-600 text-zinc-100 hover:bg-zinc-500 border border-zinc-500 whitespace-nowrap"
+                >
+                  发送
+                </button>
+              </div>
+            </div>
           </div>
 
           {/* Step log panel — collapsible */}

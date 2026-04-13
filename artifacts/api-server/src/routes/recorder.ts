@@ -1,336 +1,249 @@
 import { Router } from "express";
-import { URL } from "url";
+import { chromium } from "playwright-core";
+import { randomUUID } from "crypto";
 
 const router = Router();
 
-// ─── Helpers ──────────────────────────────────────────────────────────────────
+const CHROMIUM_PATH =
+  process.env.CHROMIUM_PATH ||
+  "/nix/store/qa9cnw4v5xkxyip6mb9kxqfq1z4x2dx1-chromium-138.0.7204.100/bin/chromium";
 
-function makeAbsolute(href: string, base: string): string {
-  if (!href) return href;
-  const s = href.trim();
-  if (/^(data:|blob:|javascript:|#|mailto:|tel:)/i.test(s)) return s;
-  try { return new URL(s, base).href; } catch { return s; }
+const VIEWPORT = { width: 1280, height: 720 };
+
+const UA =
+  "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/120.0.0.0 Safari/537.36";
+
+// ─── Types ────────────────────────────────────────────────────────────────────
+
+interface RecordedStep {
+  type: "click" | "type" | "select";
+  selector: string;
+  text?: string;
+  value?: string;
+  label?: string;
+  navigatedTo?: string;
 }
 
-function toProxy(href: string, base: string): string {
-  const abs = makeAbsolute(href, base);
-  if (!abs || /^(data:|blob:|javascript:|#|mailto:|tel:)/i.test(abs)) return href;
-  return `/api/record/res?url=${encodeURIComponent(abs)}`;
+interface RecorderSession {
+  browser: import("playwright-core").Browser;
+  page: import("playwright-core").Page;
+  lastActivity: number;
+  steps: RecordedStep[];
+  currentUrl: string;
 }
 
-/** Rewrite all loadable resource URLs in HTML to go through our proxy */
-function rewriteHtml(html: string, pageUrl: string): string {
-  // Helper that replaces a captured URL group
-  const rw = (url: string) => toProxy(url, pageUrl);
+// ─── Session registry ─────────────────────────────────────────────────────────
 
-  // Remove existing <base> tags so they don't conflict
-  html = html.replace(/<base[^>]*>/gi, "");
+const sessions = new Map<string, RecorderSession>();
 
-  // src= on media/script/img/iframe/input/source (but not <a>)
-  html = html.replace(
-    /(<(?:script|img|video|audio|source|input|iframe|embed)\b[^>]*?\s)src=(["']?)([^"'\s>]+)\2/gi,
-    (m, pre, q, url) => `${pre}src=${q}${rw(url)}${q}`
-  );
-
-  // href= on <link> only (skip <a> — the recorder intercepts those)
-  html = html.replace(
-    /(<link\b[^>]*?\s)href=(["']?)([^"'\s>]+)\2/gi,
-    (m, pre, q, url) => `${pre}href=${q}${rw(url)}${q}`
-  );
-
-  // srcset=
-  html = html.replace(
-    /\bsrcset=(["']?)([^"'>]+)\1/gi,
-    (m, q, srcset) => {
-      const rewritten = srcset
-        .split(",")
-        .map((part: string) => {
-          const [u, ...rest] = part.trim().split(/\s+/);
-          return u ? [rw(u), ...rest].join(" ") : part;
-        })
-        .join(", ");
-      return `srcset=${q}${rewritten}${q}`;
+// Auto-cleanup inactive sessions (>5 min idle)
+setInterval(() => {
+  const cutoff = Date.now() - 5 * 60_000;
+  for (const [id, s] of sessions) {
+    if (s.lastActivity < cutoff) {
+      s.browser.close().catch(() => {});
+      sessions.delete(id);
     }
-  );
-
-  // action= on <form>
-  html = html.replace(
-    /(<form\b[^>]*?\s)action=(["']?)([^"'\s>]+)\2/gi,
-    (m, pre, q, url) => `${pre}action=${q}${rw(url)}${q}`
-  );
-
-  // Strip CSP meta tags
-  html = html.replace(
-    /<meta[^>]*http-equiv=["']?Content-Security-Policy["']?[^>]*\/?>/gi,
-    ""
-  );
-
-  return html;
-}
-
-/** Rewrite url() in CSS to go through proxy */
-function rewriteCss(css: string, cssUrl: string): string {
-  return css.replace(
-    /url\((["']?)([^)"']+)\1\)/gi,
-    (m, q, url) => {
-      const u = url.trim();
-      if (/^(data:|#)/i.test(u)) return m;
-      const abs = makeAbsolute(u, cssUrl);
-      return `url(${q}/api/record/res?url=${encodeURIComponent(abs)}${q})`;
-    }
-  );
-}
-
-/** JS shim injected at the top of every page: intercepts fetch + XHR so relative API calls go through our proxy */
-function fetchShim(targetOrigin: string): string {
-  return `<script data-recorder-shim>
-(function(){
-  var B='${targetOrigin}';
-  var P='/api/record/res?url=';
-  function rw(u){
-    if(!u||typeof u!=='string')return u;
-    if(u.startsWith('/api/record/'))return u;
-    if(/^(data:|blob:|javascript:|#)/i.test(u))return u;
-    try{
-      var abs=/^https?:\\/\\//i.test(u)?u:new URL(u,B).href;
-      return P+encodeURIComponent(abs);
-    }catch(e){return u;}
   }
-  var oF=window.fetch;
-  window.fetch=function(input,init){
-    if(typeof input==='string')input=rw(input);
-    else if(input instanceof Request)input=new Request(rw(input.url),input);
-    return oF.call(window,input,init);
-  };
-  var oO=XMLHttpRequest.prototype.open;
-  XMLHttpRequest.prototype.open=function(m,url,a,u,p){
-    return oO.call(this,m,rw(url),a,u,p);
-  };
-})();
-</script>`;
-}
+}, 60_000);
 
-// NOTE: do NOT put AbortSignal here — it would be shared across all requests
-// and fire once, permanently aborting every subsequent fetch call.
-const BASE_HEADERS = {
-  "User-Agent":
-    "Mozilla/5.0 (X11; Linux x86_64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/120.0.0.0 Safari/537.36",
-  Accept:
-    "text/html,application/xhtml+xml,application/xml;q=0.9,image/webp,*/*;q=0.8",
-  "Accept-Language": "zh-CN,zh;q=0.9,en;q=0.8",
-};
+// ─── CSS selector generator (runs inside page context) ───────────────────────
 
-function htmlFetchOpts() {
-  return {
-    headers: { ...BASE_HEADERS },
-    redirect: "follow" as const,
-    signal: AbortSignal.timeout(20000),
-  };
-}
+const GET_SELECTOR = `(el) => {
+  if (!el || el.nodeType !== 1) return '';
+  if (el === document.body) return 'body';
+  const parts = [];
+  let cur = el;
+  for (let d = 0; d < 8; d++) {
+    if (!cur || cur === document.documentElement) break;
+    if (cur.id && /^[a-zA-Z][\\w:-]*$/.test(cur.id)) {
+      parts.unshift('#' + CSS.escape(cur.id));
+      break;
+    }
+    let tag = cur.tagName.toLowerCase();
+    const parent = cur.parentElement;
+    if (parent) {
+      const sibs = Array.from(parent.children).filter(c => c.tagName === cur.tagName);
+      if (sibs.length > 1) tag += ':nth-of-type(' + (sibs.indexOf(cur) + 1) + ')';
+    }
+    parts.unshift(tag);
+    cur = cur.parentElement;
+  }
+  return parts.join(' > ');
+}`;
 
-function resFetchOpts() {
-  return {
-    headers: { ...BASE_HEADERS, Accept: "*/*" },
-    redirect: "follow" as const,
-    signal: AbortSignal.timeout(12000),
-  };
-}
+const GET_LABEL = `(el) => {
+  return (
+    el.getAttribute('aria-label') ||
+    el.getAttribute('title') ||
+    el.getAttribute('placeholder') ||
+    el.getAttribute('name') ||
+    el.textContent?.trim().slice(0, 60) || ''
+  ).replace(/\\s+/g, ' ').trim();
+}`;
 
-// ─── HTML Proxy ───────────────────────────────────────────────────────────────
-// GET /api/record/proxy?url=https://example.com
-router.get("/record/proxy", async (req, res) => {
-  const raw = req.query.url as string;
-  if (!raw) return res.status(400).send("Missing ?url= parameter");
-
-  let targetUrl = raw.trim();
-  if (!/^https?:\/\//i.test(targetUrl)) targetUrl = "https://" + targetUrl;
+// ─── POST /api/record/session/start ──────────────────────────────────────────
+router.post("/record/session/start", async (req, res) => {
+  let { url } = req.body as { url?: string };
+  if (!url?.trim()) return res.status(400).json({ error: "Missing url" });
+  if (!/^https?:\/\//i.test(url)) url = "https://" + url;
 
   try {
-    new URL(targetUrl); // validate
-  } catch {
-    return res.status(400).send("Invalid URL");
-  }
+    const browser = await chromium.launch({
+      headless: true,
+      executablePath: CHROMIUM_PATH,
+      args: ["--no-sandbox", "--disable-setuid-sandbox", "--disable-dev-shm-usage"],
+    });
+    const ctx = await browser.newContext({ viewport: VIEWPORT, userAgent: UA });
+    const page = await ctx.newPage();
 
-  try {
-    const upstream = await fetch(targetUrl, htmlFetchOpts());
-    const ct = upstream.headers.get("content-type") ?? "";
-
-    if (!ct.includes("text/html")) {
-      res.setHeader("Content-Type", ct);
-      res.send(Buffer.from(await upstream.arrayBuffer()));
-      return;
+    try {
+      await page.goto(url, { waitUntil: "domcontentloaded", timeout: 20000 });
+    } catch {
+      // keep going even if networkidle times out
     }
 
-    const origin = new URL(targetUrl).origin;
-    let html = await upstream.text();
+    const sessionId = randomUUID();
+    sessions.set(sessionId, {
+      browser,
+      page,
+      lastActivity: Date.now(),
+      steps: [],
+      currentUrl: page.url(),
+    });
 
-    // 1. Rewrite all resource URLs
-    html = rewriteHtml(html, targetUrl);
-
-    // 2. Inject fetch shim + recorder script into <head>
-    const injection = fetchShim(origin) + "\n" + recorderScript();
-    if (/<head(\s[^>]*)?>/.test(html)) {
-      html = html.replace(/<head(\s[^>]*)?>/i, (m) => `${m}\n${injection}`);
-    } else {
-      html = injection + "\n" + html;
-    }
-
-    res.setHeader("Content-Type", "text/html; charset=utf-8");
-    res.send(html);
+    res.json({ sessionId, url: page.url() });
   } catch (e: unknown) {
-    const msg = e instanceof Error ? e.message : String(e);
-    res
-      .status(502)
-      .send(
-        `<html><body style="font-family:sans-serif;padding:32px;color:#333">` +
-          `<h3 style="color:#c00">无法加载页面</h3><p>${msg}</p>` +
-          `<p>目标地址：<code>${targetUrl}</code></p></body></html>`
+    res.status(500).json({ error: e instanceof Error ? e.message : String(e) });
+  }
+});
+
+// ─── GET /api/record/session/:id/stream  (SSE screenshot stream) ─────────────
+router.get("/record/session/:id/stream", async (req, res) => {
+  const session = sessions.get(req.params.id);
+  if (!session) return res.status(404).json({ error: "Session not found" });
+
+  res.setHeader("Content-Type", "text/event-stream");
+  res.setHeader("Cache-Control", "no-cache");
+  res.setHeader("Connection", "keep-alive");
+  res.flushHeaders();
+
+  let alive = true;
+  const send = (obj: object) => {
+    if (!alive) return;
+    try { res.write(`data: ${JSON.stringify(obj)}\n\n`); } catch { alive = false; }
+  };
+
+  // Send first frame immediately
+  try {
+    const shot = await session.page.screenshot({ type: "jpeg", quality: 70 });
+    send({ type: "screenshot", data: shot.toString("base64"), url: session.page.url() });
+  } catch {}
+
+  const loop = setInterval(async () => {
+    if (!alive) return;
+    session.lastActivity = Date.now();
+    try {
+      const shot = await session.page.screenshot({ type: "jpeg", quality: 70 });
+      const url = session.page.url();
+      if (url !== session.currentUrl) {
+        session.currentUrl = url;
+        send({ type: "navigated", url });
+      }
+      send({ type: "screenshot", data: shot.toString("base64"), url });
+    } catch {
+      alive = false;
+      clearInterval(loop);
+    }
+  }, 300); // ~3fps — safe even on a slow server
+
+  req.on("close", () => { alive = false; clearInterval(loop); });
+});
+
+// ─── POST /api/record/session/:id/interact ────────────────────────────────────
+router.post("/record/session/:id/interact", async (req, res) => {
+  const session = sessions.get(req.params.id);
+  if (!session) return res.status(404).json({ error: "Session not found" });
+  session.lastActivity = Date.now();
+
+  const { action, x, y, text, key, deltaY } = req.body as {
+    action: "click" | "type" | "key" | "scroll";
+    x?: number; y?: number;   // normalized 0–1
+    text?: string;
+    key?: string;
+    deltaY?: number;
+  };
+
+  const page = session.page;
+
+  try {
+    if (action === "click" && x !== undefined && y !== undefined) {
+      const px = Math.round(x * VIEWPORT.width);
+      const py = Math.round(y * VIEWPORT.height);
+
+      // Get element info BEFORE clicking
+      const info = await page.evaluate(
+        ({ selectorFn, labelFn, px, py }) => {
+          const el = document.elementFromPoint(px, py) as Element | null;
+          if (!el) return null;
+          const getSelector = new Function("el", `return (${selectorFn})(el);`) as (el: Element) => string;
+          const getLabel = new Function("el", `return (${labelFn})(el);`) as (el: Element) => string;
+          return {
+            selector: getSelector(el),
+            label: getLabel(el),
+            tag: el.tagName.toLowerCase(),
+          };
+        },
+        { selectorFn: GET_SELECTOR, labelFn: GET_LABEL, px, py }
       );
-  }
-});
 
-// ─── Resource Proxy ───────────────────────────────────────────────────────────
-// GET /api/record/res?url=https://example.com/style.css
-router.get("/record/res", async (req, res) => {
-  const raw = req.query.url as string;
-  if (!raw) return res.status(400).send("Missing ?url= parameter");
+      const prevUrl = page.url();
+      await page.mouse.click(px, py);
 
-  let targetUrl: string;
-  try {
-    targetUrl = decodeURIComponent(raw);
-    new URL(targetUrl); // validate
-  } catch {
-    return res.status(400).send("Invalid URL");
-  }
+      // Wait briefly for potential navigation or JS response
+      await page.waitForTimeout(400);
+      const newUrl = page.url();
 
-  try {
-    const upstream = await fetch(targetUrl, resFetchOpts());
+      const step: RecordedStep = {
+        type: "click",
+        selector: info?.selector ?? "",
+        label: info?.label ?? "",
+        ...(newUrl !== prevUrl ? { navigatedTo: newUrl } : {}),
+      };
+      session.steps.push(step);
+      res.json({ step, url: newUrl });
 
-    const ct = upstream.headers.get("content-type") ?? "application/octet-stream";
+    } else if (action === "type" && text) {
+      await page.keyboard.type(text, { delay: 30 });
+      res.json({ ok: true });
 
-    // Forward safe headers
-    const forward = ["content-type", "cache-control", "expires", "last-modified", "etag"];
-    for (const h of forward) {
-      const v = upstream.headers.get(h);
-      if (v) res.setHeader(h, v);
-    }
-    // Allow iframe to use these resources
-    res.setHeader("Access-Control-Allow-Origin", "*");
+    } else if (action === "key" && key) {
+      await page.keyboard.press(key);
+      await page.waitForTimeout(200);
+      res.json({ ok: true, url: page.url() });
 
-    if (ct.includes("text/css")) {
-      let css = await upstream.text();
-      css = rewriteCss(css, targetUrl);
-      res.setHeader("Content-Type", "text/css; charset=utf-8");
-      res.send(css);
-      return;
-    }
+    } else if (action === "scroll" && x !== undefined && y !== undefined) {
+      const px = Math.round(x * VIEWPORT.width);
+      const py = Math.round(y * VIEWPORT.height);
+      await page.mouse.move(px, py);
+      await page.mouse.wheel(0, deltaY ?? 300);
+      res.json({ ok: true });
 
-    if (ct.includes("javascript") || ct.includes("text/js")) {
-      // Inject fetch shim at the top of every JS file so relative XHR/fetch calls are intercepted
-      const origin = new URL(targetUrl).origin;
-      const js = await upstream.text();
-      res.setHeader("Content-Type", ct);
-      // Minimal shim (no HTML tags, just raw JS)
-      const shim = `(function(){var B='${origin}';var P='/api/record/res?url=';function rw(u){if(!u||typeof u!=='string')return u;if(u.startsWith('/api/record/'))return u;if(/^(data:|blob:|javascript:|#)/i.test(u))return u;try{var a=/^https?:\\/\\//i.test(u)?u:new URL(u,B).href;return P+encodeURIComponent(a);}catch(e){return u;}}if(typeof window!=='undefined'){if(window.__recorderShimmed)return;window.__recorderShimmed=true;var oF=window.fetch;window.fetch=function(i,o){if(typeof i==='string')i=rw(i);else if(i&&i.url)i=new Request(rw(i.url),i);return oF.call(window,i,o);};var oO=XMLHttpRequest.prototype.open;XMLHttpRequest.prototype.open=function(m,u,a,us,p){return oO.call(this,m,rw(u),a,us,p);};}})();\n`;
-      res.send(shim + js);
-      return;
-    }
-
-    // Binary/other: stream as-is
-    const buf = await upstream.arrayBuffer();
-    res.send(Buffer.from(buf));
-  } catch (e: unknown) {
-    res.status(502).send(`Resource proxy error: ${e instanceof Error ? e.message : e}`);
-  }
-});
-
-// ─── Recorder script injected into proxied HTML pages ────────────────────────
-function recorderScript(): string {
-  return `<script data-recorder>
-(function () {
-  'use strict';
-
-  function esc(id) {
-    try { return CSS.escape(id); } catch(e) { return id.replace(/[^a-zA-Z0-9_-]/g, '\\\\$&'); }
-  }
-
-  function getSelector(el) {
-    if (!el || el.nodeType !== 1) return '';
-    if (el === document.body) return 'body';
-    var parts = [];
-    var cur = el;
-    for (var depth = 0; depth < 8; depth++) {
-      if (!cur || cur === document.documentElement) break;
-      if (cur.id && /^[a-zA-Z][\\w:-]*$/.test(cur.id)) {
-        parts.unshift('#' + esc(cur.id));
-        break;
-      }
-      var tag = cur.tagName.toLowerCase();
-      var parent = cur.parentElement;
-      if (parent) {
-        var sibs = Array.from(parent.children).filter(function(c) { return c.tagName === cur.tagName; });
-        if (sibs.length > 1) tag += ':nth-of-type(' + (sibs.indexOf(cur) + 1) + ')';
-      }
-      parts.unshift(tag);
-      cur = cur.parentElement;
-    }
-    return parts.join(' > ');
-  }
-
-  function labelOf(el) {
-    var t = (el.getAttribute('aria-label') || el.getAttribute('title') ||
-              el.getAttribute('placeholder') || el.getAttribute('name') ||
-              el.textContent || '').replace(/\\s+/g, ' ').trim();
-    return t.slice(0, 60);
-  }
-
-  function send(data) {
-    try { window.parent.postMessage(Object.assign({ __recorder: true }, data), '*'); } catch(e) {}
-  }
-
-  document.addEventListener('click', function(e) {
-    var origin = e.target;
-    var clickTarget = origin;
-    var linkEl = null;
-    var walk = origin;
-    while (walk && walk !== document.body) {
-      if (walk.tagName === 'A' && walk.href && !/^\\/api\\/record\\//.test(walk.getAttribute('href') || '')) {
-        // Decode the proxied href back to the real URL
-        var realHref = walk.href;
-        var m = realHref.match(/\\/api\\/record\\/res\\?url=(.+)/);
-        if(m){ try{ realHref = decodeURIComponent(m[1]); }catch(e){} }
-        linkEl = { el: walk, href: realHref };
-        break;
-      }
-      if (['BUTTON','INPUT','LABEL','SELECT','TEXTAREA'].indexOf(walk.tagName) !== -1) {
-        clickTarget = walk;
-        break;
-      }
-      walk = walk.parentElement;
-    }
-
-    if (linkEl) {
-      e.preventDefault();
-      e.stopPropagation();
-      send({ type: 'navigate', href: linkEl.href, selector: getSelector(linkEl.el), label: labelOf(linkEl.el) });
     } else {
-      send({ type: 'click', selector: getSelector(clickTarget), label: labelOf(clickTarget) });
+      res.status(400).json({ error: "Invalid action or missing params" });
     }
-  }, true);
+  } catch (e: unknown) {
+    res.status(500).json({ error: e instanceof Error ? e.message : String(e) });
+  }
+});
 
-  document.addEventListener('change', function(e) {
-    var t = e.target;
-    if (t.tagName === 'INPUT' || t.tagName === 'TEXTAREA') {
-      send({ type: 'type', selector: getSelector(t), text: t.value, label: labelOf(t) });
-    } else if (t.tagName === 'SELECT') {
-      var opt = t.options[t.selectedIndex];
-      send({ type: 'select', selector: getSelector(t), value: t.value, label: opt ? opt.text : t.value });
-    }
-  }, true);
-
-  send({ type: '_ready', url: window.location.href, title: document.title });
-})();
-</script>`;
-}
+// ─── DELETE /api/record/session/:id ──────────────────────────────────────────
+router.delete("/record/session/:id", async (req, res) => {
+  const session = sessions.get(req.params.id);
+  if (!session) return res.status(404).json({ error: "Not found" });
+  await session.browser.close().catch(() => {});
+  sessions.delete(req.params.id);
+  res.json({ ok: true });
+});
 
 export default router;
