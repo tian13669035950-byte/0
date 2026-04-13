@@ -177,14 +177,54 @@ router.get("/record/session/:id/stream", async (req, res) => {
 const GET_SELECTOR = `(el) => {
   if (!el || el.nodeType !== 1) return '';
   if (el === document.body) return 'body';
+
+  // ── Strategy 1: stable ID (not a React Aria / Radix / long-number ID) ─────
+  const isStableId = (id) =>
+    id && !/react-aria|radix-|\\d{4,}|:\\w*:/.test(id) && /^[a-zA-Z][\\w-]*$/.test(id);
+
+  if (isStableId(el.id)) return '#' + CSS.escape(el.id);
+
+  // ── Strategy 2: unique stable attribute on the element itself ─────────────
+  const stableAttr = (e) => {
+    if (e.getAttribute('data-testid')) return '[data-testid=' + JSON.stringify(e.getAttribute('data-testid')) + ']';
+    if (e.getAttribute('aria-label'))  return '[aria-label='  + JSON.stringify(e.getAttribute('aria-label'))  + ']';
+    if (e.getAttribute('name'))        return '[name='        + JSON.stringify(e.getAttribute('name'))        + ']';
+    if (e.getAttribute('placeholder')) return '[placeholder=' + JSON.stringify(e.getAttribute('placeholder')) + ']';
+    if (e.getAttribute('role') && e.getAttribute('aria-label'))
+      return '[role=' + JSON.stringify(e.getAttribute('role')) + '][aria-label=' + JSON.stringify(e.getAttribute('aria-label')) + ']';
+    return null;
+  };
+
+  const direct = stableAttr(el);
+  if (direct) {
+    // Verify it uniquely identifies the element
+    try { if (document.querySelectorAll(direct).length === 1) return direct; } catch {}
+  }
+
+  // ── Strategy 3: walk up the DOM, prefer stable anchors ────────────────────
   const parts = [];
   let cur = el;
   for (let d = 0; d < 8; d++) {
     if (!cur || cur === document.documentElement) break;
-    if (cur.id && /^[a-zA-Z][\\w:-]*$/.test(cur.id)) {
+
+    // If this ancestor has a stable ID, use it as an anchor
+    if (isStableId(cur.id)) {
       parts.unshift('#' + CSS.escape(cur.id));
       break;
     }
+
+    // Try a stable attribute as an anchor
+    const anchor = stableAttr(cur);
+    if (anchor) {
+      try {
+        if (document.querySelectorAll(anchor).length === 1) {
+          parts.unshift(anchor);
+          break;
+        }
+      } catch {}
+    }
+
+    // Fall back to tag + nth-of-type
     let tag = cur.tagName.toLowerCase();
     const parent = cur.parentElement;
     if (parent) {
