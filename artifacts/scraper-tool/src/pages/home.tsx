@@ -220,6 +220,8 @@ export default function Home() {
   const [recFormValues, setRecFormValues] = useState<Record<string, string | number>>({});
   const [recStepPending, setRecStepPending] = useState(false);
   const [recTabCount, setRecTabCount] = useState(1);
+  const [recPickedSelector, setRecPickedSelector] = useState<string | null>(null);
+  const [recPickedLabel, setRecPickedLabel] = useState<string>("");
   const overlayRef = useRef<HTMLDivElement>(null);
   const esRef = useRef<EventSource | null>(null);
   const recStepIdRef = useRef(0);
@@ -379,6 +381,8 @@ export default function Home() {
     setRecFormType(null);
     setRecFormValues({});
     setRecTabCount(1);
+    setRecPickedSelector(null);
+    setRecPickedLabel("");
   }, [sessionId]);
 
   const startRecording = useCallback(async () => {
@@ -423,9 +427,12 @@ export default function Home() {
     }
   }, [form, toast, stopRecording]);
 
-  // Step types that use "click on page to pick element" mode
+  // Step types that execute immediately on page click (selector auto-detected + action run)
   const CLICK_PICK_TYPES = ["click", "doubleclick", "rightclick", "hover"] as const;
   type ClickPickType = typeof CLICK_PICK_TYPES[number];
+
+  // Step types that first detect the selector by clicking, then show a mini-form for remaining fields
+  const PICK_THEN_FILL_TYPES = ["type", "select", "scroll", "capture", "listen"] as const;
 
   // ── Click at coords (auto-detects CSS selector) ──────────────────────────
   const sendClickAtCoords = useCallback(async (action: ClickPickType, x: number, y: number) => {
@@ -446,6 +453,29 @@ export default function Home() {
       // Keep the same action selected so user can keep clicking more elements
     } catch (err) {
       toast({ title: "操作失败", description: String(err), variant: "destructive" });
+    } finally {
+      setRecStepPending(false);
+    }
+  }, [sessionId, toast]);
+
+  // ── Detect element at coords without executing any action ────────────────
+  const detectSelectorAtCoords = useCallback(async (x: number, y: number) => {
+    if (!sessionId) return;
+    setRecStepPending(true);
+    try {
+      const resp = await fetch(`/api/record/session/${sessionId}/detect`, {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({ x, y }),
+      });
+      if (!resp.ok) throw new Error(`HTTP ${resp.status}`);
+      const { selector, label } = await resp.json() as { selector: string; label: string };
+      setRecPickedSelector(selector || "");
+      setRecPickedLabel(label || "");
+      // Pre-fill the selector field in the form so user can edit if needed
+      setRecFormValues(prev => ({ ...prev, selector: selector || "" }));
+    } catch (err) {
+      toast({ title: "识别失败", description: String(err), variant: "destructive" });
     } finally {
       setRecStepPending(false);
     }
@@ -1386,18 +1416,25 @@ export default function Home() {
       const fv = recFormValues;
       const setFv = (k: string, v: string | number) => setRecFormValues(prev => ({ ...prev, [k]: v }));
 
-      // "Click on page" mode — overlay becomes clickable, selector auto-detected
+      // Mode 1: execute + record immediately on page click (click/dblclick/rightclick/hover)
       const isClickPickMode = recFormType !== null && (["click","doubleclick","rightclick","hover"] as string[]).includes(recFormType);
+      // Mode 2: click page to detect selector, then fill remaining fields in mini-form
+      const isPickThenFillMode = recFormType !== null && (["type","select","scroll","capture","listen"] as string[]).includes(recFormType);
+      // In mode 2, phase 1 = waiting for page click; phase 2 = selector detected, show form
+      const pickPhase1 = isPickThenFillMode && recPickedSelector === null;
+      const pickPhase2 = isPickThenFillMode && recPickedSelector !== null;
+      // Either mode makes the overlay clickable
+      const overlayClickable = (isClickPickMode || pickPhase1) && !recStepPending;
 
-      // Fields shown per step type (non-click-pick types only)
-      const needsSelector = !isClickPickMode && ["scroll","listen","capture","type","select"].includes(recFormType ?? "");
+      // Fields shown per step type
+      const needsSelector = false; // always auto-detected for pick-then-fill; hidden for click-pick
       const needsUrl      = ["navigate","newtab"].includes(recFormType ?? "");
-      const needsText     = recFormType === "type";
+      const needsText     = pickPhase2 && recFormType === "type";
       const needsKey      = recFormType === "key";
-      const needsValue    = recFormType === "select";
+      const needsValue    = pickPhase2 && recFormType === "select";
       const needsTabIndex = recFormType === "switchtab";
-      const needsListen   = recFormType === "listen";
-      const needsVarName  = recFormType === "capture";
+      const needsListen   = pickPhase2 && recFormType === "listen";
+      const needsVarName  = pickPhase2 && recFormType === "capture";
       const noParams      = ["goback","goforward","reload","wait","screenshot","closetab"].includes(recFormType ?? "");
 
       const COMMON_KEYS_LIST = ["Enter","Tab","Escape","Space","ArrowDown","ArrowUp","ArrowLeft","ArrowRight","Backspace","Delete"];
@@ -1405,7 +1442,12 @@ export default function Home() {
       const buildPayload = (): Omit<RecordedStep,"id"> | null => {
         if (!recFormType) return null;
         const base: Omit<RecordedStep,"id"> = { type: recFormType };
-        if (needsSelector && !noParams) {
+        // Use auto-detected selector (pick-then-fill mode) or fall back to form field
+        if (isPickThenFillMode) {
+          const sel = recPickedSelector ?? String(fv.selector ?? "").trim();
+          if (!sel && recFormType !== "scroll") { toast({ title: "请先点击页面元素识别选择器", variant: "destructive" }); return null; }
+          if (sel) base.selector = sel;
+        } else if (needsSelector && !noParams) {
           const sel = String(fv.selector ?? "").trim();
           if (!sel && !["scroll"].includes(recFormType)) { toast({ title: "请填写选择器", variant: "destructive" }); return null; }
           if (sel) base.selector = sel;
@@ -1427,7 +1469,12 @@ export default function Home() {
 
       const handleExecute = () => {
         const payload = buildPayload();
-        if (payload) sendStep(payload);
+        if (payload) {
+          sendStep(payload);
+          // Reset picked selector after submitting so next action starts fresh
+          setRecPickedSelector(null);
+          setRecPickedLabel("");
+        }
       };
 
       const recStepDef = STEP_TYPES.find(t => t.type === recFormType);
@@ -1491,25 +1538,38 @@ export default function Home() {
                       style={{ imageRendering: "auto" }}
                       draggable={false}
                     />
-                    {/* Overlay — clickable only in click-pick mode */}
+                    {/* Overlay — clickable in click-pick mode or pick-then-fill phase 1 */}
                     <div
                       ref={overlayRef}
-                      className={`absolute inset-0 ${isClickPickMode ? "cursor-crosshair" : ""}`}
-                      onClick={isClickPickMode && !recStepPending ? (e) => {
+                      className={`absolute inset-0 ${overlayClickable ? "cursor-crosshair" : ""}`}
+                      onClick={overlayClickable ? (e) => {
                         const rect = overlayRef.current?.getBoundingClientRect();
                         if (!rect) return;
                         const x = (e.clientX - rect.left) / rect.width;
                         const y = (e.clientY - rect.top) / rect.height;
-                        sendClickAtCoords(recFormType as "click"|"doubleclick"|"rightclick"|"hover", x, y);
+                        if (isClickPickMode) {
+                          sendClickAtCoords(recFormType as "click"|"doubleclick"|"rightclick"|"hover", x, y);
+                        } else if (pickPhase1) {
+                          detectSelectorAtCoords(x, y);
+                        }
                       } : undefined}
                     />
                     {/* Overlay hint */}
                     <div className="absolute inset-0 flex flex-col items-center justify-center pointer-events-none">
                       {isClickPickMode ? (
+                        /* Mode 1: immediate execute on click */
                         <div className="absolute bottom-3 left-2 right-2 flex justify-center">
                           <span className="text-xs bg-blue-600/95 text-white rounded-lg px-3 py-1.5 flex items-center gap-2 shadow-lg">
                             <span className="inline-block w-2 h-2 rounded-full bg-white animate-pulse" />
-                            {recStepPending ? "执行中，请稍候…" : `点击上方页面中的目标元素，自动执行「${recStepDef?.label}」并记录`}
+                            {recStepPending ? "执行中，请稍候…" : `点击页面元素 → 自动执行「${recStepDef?.label}」并记录`}
+                          </span>
+                        </div>
+                      ) : pickPhase1 ? (
+                        /* Mode 2 phase 1: waiting for element click */
+                        <div className="absolute bottom-3 left-2 right-2 flex justify-center">
+                          <span className="text-xs bg-amber-600/95 text-white rounded-lg px-3 py-1.5 flex items-center gap-2 shadow-lg">
+                            <span className="inline-block w-2 h-2 rounded-full bg-white animate-pulse" />
+                            {recStepPending ? "识别中…" : `点击页面元素 → 自动识别选择器，再填写「${recStepDef?.label}」参数`}
                           </span>
                         </div>
                       ) : recFormType === null ? (
@@ -1519,8 +1579,15 @@ export default function Home() {
                           <span className="text-xs text-white/70">点击「点击」「输入」等按钮后，再与页面交互</span>
                           <svg className="h-5 w-5 text-white/60 mt-1 animate-bounce" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2"><path d="M12 5v14M5 12l7 7 7-7"/></svg>
                         </div>
+                      ) : pickPhase2 ? (
+                        /* Mode 2 phase 2: selector detected, fill remaining fields */
+                        <div className="absolute bottom-3 left-2 right-2 flex justify-center">
+                          <span className="text-xs bg-green-700/90 text-white rounded-lg px-3 py-1.5 shadow">
+                            ✓ 已识别元素，填写下方参数后点「执行并记录」
+                          </span>
+                        </div>
                       ) : (
-                        /* Form-based step selected */
+                        /* Pure form-based step (navigate, key, wait, etc.) */
                         <div className="absolute bottom-3 left-2 right-2 flex justify-center">
                           <span className="text-xs bg-black/70 text-white/80 rounded-lg px-3 py-1.5 shadow">
                             填写下方表单后点「执行并记录」
@@ -1551,8 +1618,8 @@ export default function Home() {
                         type="button"
                         disabled={recStepPending}
                         onClick={() => {
-                          if (active) { setRecFormType(null); setRecFormValues({}); }
-                          else { setRecFormType(type); setRecFormValues({}); }
+                          if (active) { setRecFormType(null); setRecFormValues({}); setRecPickedSelector(null); setRecPickedLabel(""); }
+                          else { setRecFormType(type); setRecFormValues({}); setRecPickedSelector(null); setRecPickedLabel(""); }
                         }}
                         className={`
                           flex flex-col items-center gap-1 px-1 py-1.5 rounded-md text-center transition-all border text-[10px] font-medium
@@ -1575,19 +1642,43 @@ export default function Home() {
                     <div className="flex items-center gap-2 mb-1">
                       {RecStepIcon && <RecStepIcon className="h-3.5 w-3.5 text-zinc-300" />}
                       <span className="text-xs font-semibold text-zinc-200">{recStepDef?.label}</span>
-                      <button type="button" onClick={() => { setRecFormType(null); setRecFormValues({}); }}
+                      <button type="button" onClick={() => { setRecFormType(null); setRecFormValues({}); setRecPickedSelector(null); setRecPickedLabel(""); }}
                         className="ml-auto text-[10px] text-zinc-500 hover:text-zinc-300 transition-colors px-2 py-0.5 rounded bg-zinc-800 border border-zinc-700">
                         取消
                       </button>
                     </div>
 
-                    {/* Click-pick mode: just show instruction, no form fields */}
+                    {/* Mode 1 — click-pick: show instruction, no form fields */}
                     {isClickPickMode && (
                       <div className="flex items-center gap-2 py-1.5 px-2 rounded-md bg-blue-900/40 border border-blue-700/50">
                         <span className="inline-block w-2 h-2 rounded-full bg-blue-400 animate-pulse shrink-0" />
                         <span className="text-xs text-blue-200">
-                          直接点击上方截图中的目标元素，CSS 选择器自动识别
+                          直接点击上方截图中的目标元素，CSS 选择器自动识别，立即执行
                         </span>
+                      </div>
+                    )}
+
+                    {/* Mode 2 phase 1 — pick-then-fill: waiting for element click */}
+                    {pickPhase1 && (
+                      <div className="flex items-center gap-2 py-1.5 px-2 rounded-md bg-amber-900/40 border border-amber-700/50">
+                        <span className="inline-block w-2 h-2 rounded-full bg-amber-400 animate-pulse shrink-0" />
+                        <span className="text-xs text-amber-200">
+                          {recStepPending ? "正在识别元素…" : "点击上方截图中的目标元素，自动识别选择器"}
+                        </span>
+                      </div>
+                    )}
+
+                    {/* Mode 2 phase 2 — selector detected, show it as badge + remaining fields */}
+                    {pickPhase2 && (
+                      <div className="flex items-center gap-1.5 py-1 px-2 rounded-md bg-green-900/40 border border-green-700/50">
+                        <span className="text-[10px] text-green-300 shrink-0">已识别</span>
+                        <code className="text-[10px] text-green-200 font-mono truncate flex-1">{recPickedSelector}</code>
+                        {recPickedLabel && <span className="text-[10px] text-green-400/70 shrink-0 hidden sm:block">{recPickedLabel}</span>}
+                        <button type="button"
+                          onClick={() => { setRecPickedSelector(null); setRecPickedLabel(""); setRecFormValues(prev => ({ ...prev, selector: "" })); }}
+                          className="text-[10px] text-zinc-400 hover:text-red-400 transition-colors shrink-0">
+                          重选
+                        </button>
                       </div>
                     )}
 
@@ -1698,8 +1789,8 @@ export default function Home() {
                         />
                       </div>
                     )}
-                    {/* waitMs — shown for all types except ones that don't need it */}
-                    {!isClickPickMode && !["listen","capture"].includes(recFormType) && (
+                    {/* waitMs — shown only when form is ready to submit */}
+                    {!isClickPickMode && !pickPhase1 && !["listen","capture"].includes(recFormType) && (
                       <div className="flex items-center gap-2">
                         <label className="text-[10px] text-zinc-400 shrink-0">执行后等待</label>
                         <input
@@ -1713,8 +1804,8 @@ export default function Home() {
                       </div>
                     )}
 
-                    {/* Execute button — only for form-based types */}
-                    {!isClickPickMode && (
+                    {/* Execute button — only when form is ready (not click-pick, not pick phase 1) */}
+                    {!isClickPickMode && !pickPhase1 && (
                       <div className="flex gap-2 pt-0.5">
                         <button
                           type="button"

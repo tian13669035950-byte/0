@@ -168,6 +168,34 @@ const GET_LABEL = `(el) => {
   ).replace(/\\s+/g, ' ').trim();
 }`;
 
+// ─── POST /api/record/session/:id/detect  (detect element at coords, NO action)
+router.post("/record/session/:id/detect", async (req, res) => {
+  const session = sessions.get(req.params.id);
+  if (!session) return res.status(404).json({ error: "Session not found" });
+  session.lastActivity = Date.now();
+
+  const { x, y } = req.body as { x: number; y: number };
+  const page = session.page;
+  const px = Math.round(x * VIEWPORT.width);
+  const py = Math.round(y * VIEWPORT.height);
+
+  try {
+    const info = await page.evaluate(
+      ({ selectorFn, labelFn, px, py }) => {
+        const el = document.elementFromPoint(px, py) as Element | null;
+        if (!el) return null;
+        const getSelector = new Function("el", `return (${selectorFn})(el);`) as (el: Element) => string;
+        const getLabel    = new Function("el", `return (${labelFn})(el);`)    as (el: Element) => string;
+        return { selector: getSelector(el), label: getLabel(el) };
+      },
+      { selectorFn: GET_SELECTOR, labelFn: GET_LABEL, px, py }
+    );
+    res.json({ selector: info?.selector ?? "", label: info?.label ?? "" });
+  } catch (e: unknown) {
+    res.status(500).json({ error: e instanceof Error ? e.message : String(e) });
+  }
+});
+
 // ─── POST /api/record/session/:id/click  (click at coords, auto-detect selector)
 router.post("/record/session/:id/click", async (req, res) => {
   const session = sessions.get(req.params.id);
