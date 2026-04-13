@@ -222,6 +222,7 @@ export default function Home() {
   const [recTabCount, setRecTabCount] = useState(1);
   const [recPickedSelector, setRecPickedSelector] = useState<string | null>(null);
   const [recPickedLabel, setRecPickedLabel] = useState<string>("");
+  const [recVars, setRecVars] = useState<Record<string, string>>({});
   const overlayRef = useRef<HTMLDivElement>(null);
   const esRef = useRef<EventSource | null>(null);
   const recStepIdRef = useRef(0);
@@ -383,6 +384,7 @@ export default function Home() {
     setRecTabCount(1);
     setRecPickedSelector(null);
     setRecPickedLabel("");
+    setRecVars({});
   }, [sessionId]);
 
   const connectStream = useCallback((sid: string) => {
@@ -497,11 +499,12 @@ export default function Home() {
         body: JSON.stringify(stepPayload),
       });
       if (!resp.ok) throw new Error(`HTTP ${resp.status}`);
-      const result = await resp.json() as { ok: boolean; step: RecordedStep; url: string; tabCount: number };
+      const result = await resp.json() as { ok: boolean; step: RecordedStep; url: string; tabCount: number; vars?: Record<string, string> };
       const newId = String(++recStepIdRef.current);
       setRecordedSteps((s) => [...s, { id: newId, ...result.step }]);
       if (result.url) setSessionCurrentUrl(result.url);
       if (result.tabCount) setRecTabCount(result.tabCount);
+      if (result.vars) setRecVars(result.vars);
       setRecFormType(null);
       setRecFormValues({});
       if (!result.ok) toast({ title: "步骤执行失败", description: "选择器或参数可能有误，已记录供参考", variant: "destructive" });
@@ -1909,6 +1912,25 @@ export default function Home() {
                       </div>
                     )}
                   </ScrollArea>
+
+                  {/* Captured variables panel */}
+                  {Object.keys(recVars).length > 0 && (
+                    <div className="shrink-0 border-t px-3 py-2 bg-green-950/30">
+                      <div className="flex items-center gap-1.5 mb-1.5">
+                        <span className="text-[10px] font-semibold text-green-400 uppercase tracking-wide">已捕获变量</span>
+                        <span className="text-[10px] text-green-600/70">（后续步骤可用 {"${变量名}"} 引用）</span>
+                      </div>
+                      <div className="space-y-1">
+                        {Object.entries(recVars).map(([k, v]) => (
+                          <div key={k} className="flex items-center gap-1.5 text-[10px]">
+                            <code className="text-green-300 font-mono shrink-0">${"{" + k + "}"}</code>
+                            <span className="text-green-500/60">=</span>
+                            <span className="text-green-200/80 truncate font-mono">"{v}"</span>
+                          </div>
+                        ))}
+                      </div>
+                    </div>
+                  )}
 
                   <div className="p-2.5 border-t bg-background shrink-0 space-y-1.5">
                     {recordedSteps.length > 0 ? (

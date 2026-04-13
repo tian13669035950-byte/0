@@ -39,6 +39,7 @@ interface RecorderSession {
   lastActivity: number;
   steps: RecordedStep[];
   currentUrl: string;
+  vars: Record<string, string>;  // captured variables, e.g. { price: "¥128" }
 }
 
 // ─── Session registry ─────────────────────────────────────────────────────────
@@ -84,6 +85,7 @@ router.post("/record/session/start", async (req, res) => {
       lastActivity: Date.now(),
       steps: [],
       currentUrl: page.url(),
+      vars: {},
     });
 
     res.json({ sessionId, url: page.url() });
@@ -298,6 +300,9 @@ router.post("/record/session/:id/step", async (req, res) => {
   let page = session.page;
   let ok = true;
 
+  // Resolve ${varName} placeholders using captured variables
+  const rv = (s: string) => s.replace(/\$\{([^}]+)\}/g, (_, n) => session.vars[n.trim()] ?? "");
+
   try {
     switch (step.type) {
       case "click":
@@ -320,7 +325,7 @@ router.post("/record/session/:id/step", async (req, res) => {
 
       case "type":
         await page.waitForSelector(step.selector!, { timeout: 8000 });
-        await page.fill(step.selector!, step.text ?? "");
+        await page.fill(step.selector!, rv(step.text ?? ""));
         await page.waitForTimeout(step.waitMs ?? 300);
         break;
 
@@ -331,7 +336,7 @@ router.post("/record/session/:id/step", async (req, res) => {
 
       case "select":
         await page.waitForSelector(step.selector!, { timeout: 8000 });
-        await page.selectOption(step.selector!, step.value ?? "");
+        await page.selectOption(step.selector!, rv(step.value ?? ""));
         await page.waitForTimeout(step.waitMs ?? 300);
         break;
 
@@ -352,7 +357,7 @@ router.post("/record/session/:id/step", async (req, res) => {
         break;
 
       case "navigate":
-        await page.goto(step.url!, { waitUntil: "domcontentloaded", timeout: 20000 });
+        await page.goto(rv(step.url!), { waitUntil: "domcontentloaded", timeout: 20000 });
         await page.waitForTimeout(step.waitMs ?? 1500);
         break;
 
@@ -392,8 +397,12 @@ router.post("/record/session/:id/step", async (req, res) => {
         if (step.selector?.trim()) {
           const el = await page.$(step.selector);
           if (el) {
-            const captured = (await el.textContent()) ?? "";
+            const captured = (await el.textContent() ?? "").trim();
             step.label = captured.slice(0, 80);
+            // Store in session vars if a variable name is given
+            if (step.varName?.trim()) {
+              session.vars[step.varName.trim()] = captured;
+            }
           }
         }
         break;
@@ -405,7 +414,7 @@ router.post("/record/session/:id/step", async (req, res) => {
         session.page = newTab;
         page = newTab;
         if (step.url?.trim()) {
-          await newTab.goto(step.url, { waitUntil: "domcontentloaded", timeout: 20000 });
+          await newTab.goto(rv(step.url), { waitUntil: "domcontentloaded", timeout: 20000 });
         }
         await newTab.waitForTimeout(step.waitMs ?? 1500);
         break;
@@ -452,7 +461,7 @@ router.post("/record/session/:id/step", async (req, res) => {
   }
 
   session.steps.push(step);
-  res.json({ ok, step, url: newUrl, tabCount: session.tabs.length });
+  res.json({ ok, step, url: newUrl, tabCount: session.tabs.length, vars: session.vars });
 });
 
 // ─── GET /api/record/session/:id/text  (copy visible text) ──────────────────
