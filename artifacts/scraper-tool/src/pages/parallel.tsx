@@ -1,9 +1,9 @@
-import { useState, useRef, useCallback } from "react";
+import { useState, useRef, useCallback, useEffect } from "react";
 import { Button } from "@/components/ui/button";
 import { Input } from "@/components/ui/input";
 import { Card, CardContent, CardHeader, CardTitle } from "@/components/ui/card";
 import { useToast } from "@/hooks/use-toast";
-import { Play, Square, Plus, Trash2, CheckCircle2, AlertCircle, Loader2, GitFork } from "lucide-react";
+import { Play, Square, Plus, Trash2, CheckCircle2, AlertCircle, Loader2, GitFork, Monitor } from "lucide-react";
 
 interface Step {
   type: string;
@@ -42,6 +42,9 @@ interface TrackState {
   done: boolean;
   error?: string;
   duration?: number;
+  watchId?: string;
+  screenshot?: string;
+  liveUrl?: string;
 }
 
 const STORAGE_KEY = "scraper-sequences-v3";
@@ -61,11 +64,39 @@ export default function Parallel() {
   const [running, setRunning] = useState(false);
   const [trackStates, setTrackStates] = useState<TrackState[]>([]);
   const abortRef = useRef<AbortController | null>(null);
+  // Map track index → EventSource for screenshots
+  const watchEsRefs = useRef<Map<number, EventSource>>(new Map());
 
   const proxyUrl = localStorage.getItem("scraper-proxy") ?? "";
   const headedMode = localStorage.getItem("scraper-headed") === "1";
 
-  const refreshSequences = () => setSequences(loadSequences());
+  // Close all watch streams
+  const closeAllWatch = useCallback(() => {
+    watchEsRefs.current.forEach(es => es.close());
+    watchEsRefs.current.clear();
+  }, []);
+
+  useEffect(() => () => closeAllWatch(), [closeAllWatch]);
+
+  const openWatch = useCallback((trackIdx: number, watchId: string) => {
+    const existing = watchEsRefs.current.get(trackIdx);
+    if (existing) existing.close();
+    const es = new EventSource(`/api/scrape/watch/${watchId}`);
+    es.onmessage = (e) => {
+      const d = JSON.parse(e.data) as { type: string; data?: string; url?: string };
+      if (d.type === "screenshot" && d.data) {
+        setTrackStates(prev => {
+          const next = [...prev];
+          if (!next[trackIdx]) return prev;
+          next[trackIdx] = { ...next[trackIdx], screenshot: `data:image/jpeg;base64,${d.data}`, liveUrl: d.url };
+          return next;
+        });
+      }
+      if (d.type === "done") { es.close(); watchEsRefs.current.delete(trackIdx); }
+    };
+    es.onerror = () => { es.close(); watchEsRefs.current.delete(trackIdx); };
+    watchEsRefs.current.set(trackIdx, es);
+  }, []);
 
   const addTrack = () => {
     if (tracks.length >= 6) return;
@@ -87,23 +118,16 @@ export default function Parallel() {
       return { track, seq, url, idx };
     });
 
-    for (const { track, seq, url, idx } of resolvedTracks) {
-      if (!seq) {
-        toast({ title: `轨道 ${TRACK_LABELS[idx]} 没有选择方案`, variant: "destructive" });
-        return;
-      }
-      if (!url) {
-        toast({ title: `轨道 ${TRACK_LABELS[idx]} 没有 URL（方案里没有保存网址，请手动填写）`, variant: "destructive" });
-        return;
-      }
+    for (const { seq, url, idx } of resolvedTracks) {
+      if (!seq) { toast({ title: `轨道 ${TRACK_LABELS[idx]} 没有选择方案`, variant: "destructive" }); return; }
+      if (!url) { toast({ title: `轨道 ${TRACK_LABELS[idx]} 没有 URL（方案里没保存网址，请手动填写）`, variant: "destructive" }); return; }
     }
 
+    closeAllWatch();
     const ac = new AbortController();
     abortRef.current = ac;
     setRunning(true);
-    setTrackStates(tracks.map(() => ({
-      activeStep: null, doneSteps: {}, capturedVars: {}, done: false,
-    })));
+    setTrackStates(tracks.map(() => ({ activeStep: null, doneSteps: {}, capturedVars: {}, done: false })));
 
     const payload = {
       tracks: resolvedTracks.map(({ seq, url, idx }) => ({
@@ -144,6 +168,12 @@ export default function Parallel() {
             if (ev.t === "all_done") continue;
             const idx = ev.track;
             if (idx === undefined) continue;
+
+            // Open screenshot stream when watch session is ready
+            if (ev.t === "watch_ready" && ev.watchId) {
+              openWatch(idx, ev.watchId as string);
+            }
+
             setTrackStates(prev => {
               const next = [...prev];
               if (!next[idx]) return prev;
@@ -156,7 +186,7 @@ export default function Parallel() {
               next[idx] = ts;
               return next;
             });
-          } catch { /* parse error, skip */ }
+          } catch { /* parse error */ }
         }
       }
       toast({ title: "并行执行完成", description: `共 ${tracks.length} 条轨道` });
@@ -169,27 +199,28 @@ export default function Parallel() {
     } finally {
       setRunning(false);
       abortRef.current = null;
+      setTimeout(() => closeAllWatch(), 3000);
     }
-  }, [tracks, sequences, proxyUrl, headedMode, toast]);
+  }, [tracks, sequences, proxyUrl, headedMode, toast, openWatch, closeAllWatch]);
 
   const cancel = () => abortRef.current?.abort();
 
   return (
     <div className="container mx-auto px-3 sm:px-4 py-4 sm:py-8 max-w-7xl">
-      <div className="mb-6">
+      <div className="mb-5">
         <h1 className="text-xl font-bold flex items-center gap-2">
           <GitFork className="h-5 w-5 text-primary" />并行执行
         </h1>
         <p className="text-sm text-muted-foreground mt-1">
-          多条轨道同时运行——适合「A 监听等待，B 同时触发」场景（如 B 触发发送邮件，A 同步监听收件）
+          多条轨道同时运行——适合「A 监听等待，B 同时触发」场景
         </p>
       </div>
 
       {sequences.length === 0 ? (
         <div className="rounded-lg border border-amber-200 bg-amber-50 px-4 py-6 text-center">
           <p className="text-sm text-amber-700 font-medium">还没有保存的方案</p>
-          <p className="text-xs text-amber-600 mt-1">请先在「抓取面板」里配置好步骤，点「保存方案」后再来这里</p>
-          <Button variant="outline" size="sm" className="mt-3" onClick={refreshSequences}>刷新列表</Button>
+          <p className="text-xs text-amber-600 mt-1">请先在「抓取面板」配置好步骤，点「保存方案」后再来这里</p>
+          <Button variant="outline" size="sm" className="mt-3" onClick={() => setSequences(loadSequences())}>刷新列表</Button>
         </div>
       ) : (
         <>
@@ -198,13 +229,16 @@ export default function Parallel() {
               const seq = sequences.find(s => s.name === track.seqName);
               const ts = trackStates[idx];
               const label = TRACK_LABELS[idx];
+              const isActive = ts && !ts.done && !ts.error && running;
+
               return (
-                <Card key={track.id} className={`border-border/50 transition-shadow ${ts && !ts.done && !ts.error && running ? "shadow-md ring-1 ring-primary/20" : ""}`}>
+                <Card key={track.id} className={`border-border/50 transition-shadow overflow-hidden ${isActive ? "shadow-md ring-1 ring-primary/20" : ""}`}>
                   <CardHeader className="pb-2 pt-3 px-4">
                     <CardTitle className="text-sm flex items-center justify-between">
                       <span className="flex items-center gap-2">
                         <span className="w-6 h-6 rounded-full bg-primary/10 text-primary text-xs flex items-center justify-center font-bold">{label}</span>
                         轨道 {label}
+                        {isActive && <span className="w-1.5 h-1.5 rounded-full bg-primary animate-pulse" />}
                       </span>
                       {tracks.length > 2 && !running && (
                         <button onClick={() => removeTrack(track.id)} className="text-muted-foreground hover:text-destructive transition-colors">
@@ -213,37 +247,68 @@ export default function Parallel() {
                       )}
                     </CardTitle>
                   </CardHeader>
+
                   <CardContent className="px-4 pb-4 space-y-3">
-                    <div>
-                      <label className="text-xs text-muted-foreground mb-1 block">选择方案</label>
-                      <select
-                        className="w-full border border-input rounded-md px-2 py-1.5 text-sm bg-background"
-                        value={track.seqName}
-                        onChange={e => updateTrack(track.id, { seqName: e.target.value })}
-                        disabled={running}
-                      >
-                        <option value="">-- 选择已保存的方案 --</option>
-                        {sequences.map(s => (
-                          <option key={s.name} value={s.name}>{s.name}（{s.steps.length} 步）</option>
-                        ))}
-                      </select>
-                    </div>
+                    {/* Live screenshot */}
+                    {ts?.screenshot ? (
+                      <div className="rounded-md overflow-hidden border border-border/40 bg-black">
+                        <img
+                          src={ts.screenshot}
+                          alt="实时截图"
+                          className="w-full object-cover"
+                          style={{ maxHeight: 180, objectPosition: "top" }}
+                        />
+                        {ts.liveUrl && (
+                          <p className="text-[9px] font-mono text-white/60 bg-black/80 px-2 py-0.5 truncate">
+                            {ts.liveUrl}
+                          </p>
+                        )}
+                      </div>
+                    ) : running && ts && !ts.done && !ts.error ? (
+                      <div className="rounded-md border border-border/40 bg-muted/30 flex items-center justify-center" style={{ height: 100 }}>
+                        <div className="flex flex-col items-center gap-1.5 text-muted-foreground">
+                          <Monitor className="h-5 w-5 animate-pulse" />
+                          <span className="text-xs">浏览器启动中...</span>
+                        </div>
+                      </div>
+                    ) : null}
 
-                    <div>
-                      <label className="text-xs text-muted-foreground mb-1 block">
-                        网址{seq?.url ? <span className="text-[10px] ml-1 opacity-60">默认：{seq.url}</span> : <span className="text-red-500 ml-1">（必填）</span>}
-                      </label>
-                      <Input
-                        placeholder={seq?.url ?? "https://..."}
-                        className="text-xs h-8 font-mono"
-                        value={track.urlOverride}
-                        onChange={e => updateTrack(track.id, { urlOverride: e.target.value })}
-                        disabled={running}
-                      />
-                    </div>
+                    {/* Config (shown when not running) */}
+                    {!running && (
+                      <>
+                        <div>
+                          <label className="text-xs text-muted-foreground mb-1 block">选择方案</label>
+                          <select
+                            className="w-full border border-input rounded-md px-2 py-1.5 text-sm bg-background"
+                            value={track.seqName}
+                            onChange={e => updateTrack(track.id, { seqName: e.target.value })}
+                          >
+                            <option value="">-- 选择已保存的方案 --</option>
+                            {sequences.map(s => (
+                              <option key={s.name} value={s.name}>{s.name}（{s.steps.length} 步）</option>
+                            ))}
+                          </select>
+                        </div>
+                        <div>
+                          <label className="text-xs text-muted-foreground mb-1 block">
+                            网址
+                            {seq?.url
+                              ? <span className="text-[10px] ml-1 opacity-60 font-mono truncate inline-block max-w-[120px] align-middle">{seq.url}</span>
+                              : <span className="text-red-500 ml-1">（必填）</span>}
+                          </label>
+                          <Input
+                            placeholder={seq?.url ?? "https://..."}
+                            className="text-xs h-8 font-mono"
+                            value={track.urlOverride}
+                            onChange={e => updateTrack(track.id, { urlOverride: e.target.value })}
+                          />
+                        </div>
+                      </>
+                    )}
 
+                    {/* Status */}
                     {ts && (
-                      <div className="space-y-2 pt-1 border-t border-border/40">
+                      <div className="space-y-2">
                         {ts.error ? (
                           <div className="flex items-start gap-1.5 text-xs text-destructive">
                             <AlertCircle className="h-3.5 w-3.5 mt-0.5 shrink-0" />
@@ -261,6 +326,7 @@ export default function Parallel() {
                           </div>
                         )}
 
+                        {/* Step progress dots */}
                         {seq && seq.steps.length > 0 && (
                           <div className="flex flex-wrap gap-1">
                             {seq.steps.map((_, i) => (
@@ -281,6 +347,7 @@ export default function Parallel() {
                           </div>
                         )}
 
+                        {/* Captured vars */}
                         {Object.keys(ts.capturedVars).length > 0 && (
                           <div className="space-y-1">
                             {Object.entries(ts.capturedVars).map(([k, v]) => (
@@ -300,7 +367,7 @@ export default function Parallel() {
             })}
           </div>
 
-          <div className="flex items-center gap-3">
+          <div className="flex items-center gap-3 flex-wrap">
             {!running ? (
               <Button onClick={runParallel} className="gap-2">
                 <Play className="h-4 w-4" />并行执行
@@ -310,14 +377,16 @@ export default function Parallel() {
                 <Square className="h-4 w-4" />停止全部
               </Button>
             )}
-            {tracks.length < 6 && (
-              <Button onClick={addTrack} variant="outline" size="sm" className="gap-1.5" disabled={running}>
+            {tracks.length < 6 && !running && (
+              <Button onClick={addTrack} variant="outline" size="sm" className="gap-1.5">
                 <Plus className="h-3.5 w-3.5" />添加轨道
               </Button>
             )}
-            <Button onClick={refreshSequences} variant="ghost" size="sm" className="text-muted-foreground" disabled={running}>
-              刷新方案列表
-            </Button>
+            {!running && (
+              <Button onClick={() => setSequences(loadSequences())} variant="ghost" size="sm" className="text-muted-foreground">
+                刷新方案列表
+              </Button>
+            )}
           </div>
 
           {proxyUrl && (

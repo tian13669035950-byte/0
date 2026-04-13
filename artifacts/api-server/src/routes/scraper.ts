@@ -601,6 +601,14 @@ router.post("/parallel/stream", async (req, res) => {
     try { res.write(": ping\n"); } catch { /* closed */ }
   }, 8000);
 
+  // Pre-register a watch slot per track so the screenshot SSE can start immediately
+  const watchIds = parsed.data.tracks.map(() => {
+    const wid = randomUUID();
+    watchSessions.set(wid, { page: null });
+    return wid;
+  });
+  watchIds.forEach((wid, idx) => write({ track: idx, t: "watch_ready", watchId: wid }));
+
   await Promise.all(
     parsed.data.tracks.map(async (track, idx) => {
       try {
@@ -608,13 +616,15 @@ router.post("/parallel/stream", async (req, res) => {
           track.url,
           track.options,
           (event) => write({ track: idx, ...event }),
-          undefined,
+          watchIds[idx],
           track.proxy,
           track.headed,
         );
         write({ track: idx, t: "result", ...result });
       } catch (err) {
         write({ track: idx, t: "error", message: err instanceof Error ? err.message : String(err) });
+      } finally {
+        watchSessions.delete(watchIds[idx]);
       }
     })
   );
