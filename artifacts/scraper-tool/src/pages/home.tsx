@@ -1,4 +1,4 @@
-import { useState, useRef, useCallback } from "react";
+import { useState, useRef, useCallback, useEffect } from "react";
 import { useForm, useFieldArray } from "react-hook-form";
 import { zodResolver } from "@hookform/resolvers/zod";
 import * as z from "zod";
@@ -19,8 +19,20 @@ import {
   TrendingUp, ChevronDown, ChevronUp, ExternalLink, Repeat, Square,
   Play, ArrowUp, ArrowDown, Timer, Save, FolderOpen, X,
   Keyboard, ListOrdered, Eye, MoveDown, Type, Activity,
+  Video, StopCircle, Undo2, Link2,
 } from "lucide-react";
 import type { ScrapeResult } from "@workspace/api-client-react/src/generated/api.schemas";
+
+// ─── Recorder types ───────────────────────────────────────────────────────────
+type RecordedStep = {
+  id: string;
+  type: "click" | "type" | "select";
+  selector: string;
+  text?: string;
+  value?: string;
+  label?: string;
+  navigatedTo?: string;
+};
 
 // ─── Step definitions ────────────────────────────────────────────────────────
 
@@ -136,6 +148,14 @@ export default function Home() {
     liveVars: Record<string, string>;
   } | null>(null);
 
+  // ── Recorder state ────────────────────────────────────────────────────────
+  const [isRecording, setIsRecording] = useState(false);
+  const [recordedSteps, setRecordedSteps] = useState<RecordedStep[]>([]);
+  const [iframeSrc, setIframeSrc] = useState("");
+  const [iframeReady, setIframeReady] = useState(false);
+  const iframeRef = useRef<HTMLIFrameElement>(null);
+  const recStepIdRef = useRef(0);
+
   const form = useForm<FormValues>({
     resolver: zodResolver(formSchema),
     defaultValues: {
@@ -220,6 +240,64 @@ export default function Home() {
     return result;
   }, []);
 
+  // ── Recorder handlers ─────────────────────────────────────────────────────
+  useEffect(() => {
+    if (!isRecording) return;
+    const handler = (e: MessageEvent) => {
+      if (!e.data?.__recorder) return;
+      const ev = e.data;
+      if (ev.type === "_ready") {
+        setIframeReady(true);
+        return;
+      }
+      const newId = String(++recStepIdRef.current);
+      if (ev.type === "click") {
+        setRecordedSteps((s) => [...s, { id: newId, type: "click", selector: ev.selector ?? "", label: ev.label }]);
+      } else if (ev.type === "navigate") {
+        // Record as a click step (clicking the link) and navigate the iframe
+        setRecordedSteps((s) => [...s, { id: newId, type: "click", selector: ev.selector ?? "", label: ev.label, navigatedTo: ev.href }]);
+        const proxied = `/api/record/proxy?url=${encodeURIComponent(ev.href)}`;
+        setIframeSrc(proxied);
+        setIframeReady(false);
+      } else if (ev.type === "type") {
+        setRecordedSteps((s) => [...s, { id: newId, type: "type", selector: ev.selector ?? "", text: ev.text, label: ev.label }]);
+      } else if (ev.type === "select") {
+        setRecordedSteps((s) => [...s, { id: newId, type: "select", selector: ev.selector ?? "", value: ev.value, label: ev.label }]);
+      }
+    };
+    window.addEventListener("message", handler);
+    return () => window.removeEventListener("message", handler);
+  }, [isRecording]);
+
+  const startRecording = useCallback(() => {
+    const url = form.getValues("url");
+    if (!url?.trim() || url === "https://example.com") {
+      toast({ title: "请先填写目标网址", variant: "destructive" });
+      return;
+    }
+    setRecordedSteps([]);
+    setIframeReady(false);
+    recStepIdRef.current = 0;
+    setIframeSrc(`/api/record/proxy?url=${encodeURIComponent(url.trim())}`);
+    setIsRecording(true);
+  }, [form, toast]);
+
+  const stopRecording = useCallback(() => setIsRecording(false), []);
+
+  const applyRecordedSteps = useCallback(() => {
+    recordedSteps.forEach((rs) => {
+      if (rs.type === "click") {
+        appendStep({ type: "click", selector: rs.selector, waitMs: 1500 });
+      } else if (rs.type === "type") {
+        appendStep({ type: "type", selector: rs.selector, text: rs.text ?? "", waitMs: 500 });
+      } else if (rs.type === "select") {
+        appendStep({ type: "select", selector: rs.selector, value: rs.value ?? "", waitMs: 500 });
+      }
+    });
+    setIsRecording(false);
+    toast({ title: `已添加 ${recordedSteps.length} 个步骤`, description: "可在左侧步骤列表中查看和调整" });
+  }, [recordedSteps, appendStep, toast]);
+
   const runSingle = useCallback(async () => {
     setSinglePending(true);
     setExecProgress({ activeIdx: null, doneMap: {}, liveVars: {} });
@@ -270,6 +348,7 @@ export default function Home() {
   const watchedSteps = form.watch("steps");
 
   return (
+    <>
     <div className="container mx-auto px-4 py-8 max-w-7xl">
       <div className="grid grid-cols-1 lg:grid-cols-12 gap-6">
 
@@ -298,6 +377,18 @@ export default function Home() {
                     </FormItem>
                   )} />
                 </CardContent>
+                <CardFooter className="pt-0 pb-3">
+                  <Button
+                    type="button"
+                    variant="outline"
+                    size="sm"
+                    className="w-full gap-2 text-red-600 border-red-200 hover:bg-red-50 hover:border-red-300"
+                    onClick={startRecording}
+                  >
+                    <Video className="h-3.5 w-3.5" />
+                    可视化录制步骤
+                  </Button>
+                </CardFooter>
               </Card>
 
               {/* Step builder */}
@@ -897,6 +988,140 @@ export default function Home() {
         </div>
       </div>
     </div>
+
+    {/* ── Visual Recorder Overlay ─────────────────────────────────────────── */}
+    {isRecording && (
+      <div className="fixed inset-0 z-50 flex flex-col bg-background/95 backdrop-blur-sm animate-in fade-in">
+        {/* Top bar */}
+        <div className="flex items-center gap-3 px-4 py-3 border-b bg-background shadow-sm shrink-0">
+          <div className="flex items-center gap-2">
+            <span className="relative flex h-3 w-3">
+              <span className="animate-ping absolute inline-flex h-full w-full rounded-full bg-red-400 opacity-75" />
+              <span className="relative inline-flex rounded-full h-3 w-3 bg-red-500" />
+            </span>
+            <span className="text-sm font-semibold text-red-600">录制中</span>
+          </div>
+          <div className="flex-1 flex items-center gap-2 min-w-0">
+            <Link2 className="h-3.5 w-3.5 text-muted-foreground shrink-0" />
+            <span className="text-xs text-muted-foreground font-mono truncate">{iframeSrc.replace("/api/record/proxy?url=", "").split("?")[0]}</span>
+          </div>
+          {!iframeReady && (
+            <div className="flex items-center gap-1.5 text-xs text-muted-foreground">
+              <Loader2 className="h-3 w-3 animate-spin" />加载中…
+            </div>
+          )}
+          <Button type="button" variant="ghost" size="sm" className="gap-1.5 text-muted-foreground" onClick={stopRecording}>
+            <X className="h-4 w-4" />关闭
+          </Button>
+          <Button type="button" variant="destructive" size="sm" className="gap-1.5" onClick={stopRecording}>
+            <StopCircle className="h-4 w-4" />停止录制
+          </Button>
+        </div>
+
+        {/* Main content: browser iframe + step log */}
+        <div className="flex flex-1 overflow-hidden">
+          {/* iframe */}
+          <div className="flex-1 relative bg-white">
+            <iframe
+              ref={iframeRef}
+              src={iframeSrc}
+              className="w-full h-full border-0"
+              sandbox="allow-scripts allow-same-origin allow-forms allow-popups allow-popups-to-escape-sandbox"
+              title="录制浏览器"
+            />
+          </div>
+
+          {/* Step log panel */}
+          <div className="w-80 border-l flex flex-col bg-muted/20 shrink-0">
+            <div className="flex items-center justify-between px-3 py-2.5 border-b bg-background">
+              <div className="flex items-center gap-2 text-sm font-medium">
+                <Activity className="h-4 w-4 text-primary" />
+                已记录步骤
+                {recordedSteps.length > 0 && (
+                  <Badge variant="secondary" className="font-mono text-xs">{recordedSteps.length}</Badge>
+                )}
+              </div>
+              {recordedSteps.length > 0 && (
+                <Button
+                  type="button"
+                  variant="ghost"
+                  size="sm"
+                  className="h-7 px-2 text-xs text-muted-foreground"
+                  onClick={() => setRecordedSteps((s) => s.slice(0, -1))}
+                >
+                  <Undo2 className="h-3 w-3 mr-1" />撤销
+                </Button>
+              )}
+            </div>
+
+            <ScrollArea className="flex-1">
+              {recordedSteps.length === 0 ? (
+                <div className="flex flex-col items-center justify-center h-40 text-center px-4">
+                  <MousePointerClick className="h-8 w-8 text-muted-foreground/40 mb-3" />
+                  <p className="text-xs text-muted-foreground">在左侧页面上点击、输入、选择</p>
+                  <p className="text-xs text-muted-foreground mt-1">操作会自动记录在这里</p>
+                </div>
+              ) : (
+                <div className="p-2 space-y-1.5">
+                  {recordedSteps.map((rs, i) => {
+                    const stepDef = rs.type === "click"
+                      ? { label: "点击", icon: MousePointerClick, color: "blue" }
+                      : rs.type === "type"
+                      ? { label: "输入", icon: Type, color: "green" }
+                      : { label: "选择", icon: ListOrdered, color: "cyan" };
+                    const colors = COLOR_MAP[stepDef.color];
+                    const Icon = stepDef.icon;
+                    return (
+                      <div key={rs.id} className={`rounded-md border p-2 ${colors.bg} ${colors.border} animate-in slide-in-from-bottom-1`}>
+                        <div className="flex items-center gap-1.5 mb-1">
+                          <span className="text-[10px] font-mono text-muted-foreground">{i + 1}</span>
+                          <Icon className="h-3 w-3 shrink-0 text-foreground/60" />
+                          <span className="text-xs font-semibold">{stepDef.label}</span>
+                          {rs.navigatedTo && (
+                            <span className="text-[10px] text-muted-foreground ml-auto truncate max-w-[100px]">→ 新页面</span>
+                          )}
+                        </div>
+                        <code className="text-[10px] font-mono text-foreground/70 break-all leading-tight block">
+                          {rs.selector}
+                        </code>
+                        {rs.text && (
+                          <span className="text-[10px] text-green-700 mt-0.5 block truncate">"{rs.text}"</span>
+                        )}
+                        {rs.label && (
+                          <span className="text-[10px] text-muted-foreground mt-0.5 block truncate">{rs.label}</span>
+                        )}
+                      </div>
+                    );
+                  })}
+                </div>
+              )}
+            </ScrollArea>
+
+            {/* Apply footer */}
+            <div className="p-3 border-t bg-background shrink-0 space-y-2">
+              {recordedSteps.length > 0 ? (
+                <Button
+                  type="button"
+                  className="w-full gap-2"
+                  onClick={applyRecordedSteps}
+                >
+                  <CheckCircle2 className="h-4 w-4" />
+                  应用 {recordedSteps.length} 个步骤到序列
+                </Button>
+              ) : (
+                <Button type="button" variant="outline" className="w-full" onClick={stopRecording}>
+                  取消录制
+                </Button>
+              )}
+              <p className="text-[10px] text-muted-foreground text-center">
+                应用后可在左侧步骤列表中编辑调整
+              </p>
+            </div>
+          </div>
+        </div>
+      </div>
+    )}
+    </>
   );
 }
 
