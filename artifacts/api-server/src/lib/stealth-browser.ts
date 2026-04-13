@@ -1,13 +1,12 @@
 import { chromium, BrowserContext, BrowserContextOptions } from "playwright-core";
 import { spawn, execSync } from "child_process";
 
-export const CHROMIUM_PATH =
-  process.env.CHROMIUM_PATH ||
-  "/nix/store/qa9cnw4v5xkxyip6mb9kxqfq1z4x2dx1-chromium-138.0.7204.100/bin/chromium";
+const NIX_CHROMIUM = "/nix/store/qa9cnw4v5xkxyip6mb9kxqfq1z4x2dx1-chromium-138.0.7204.100/bin/chromium";
+const NIX_XVFB    = "/nix/store/ykck7gdd6szwrb3qnpb5y5fvjlnmzhz0-xorg-server-21.1.18/bin/Xvfb";
 
-const XVFB_PATH =
-  process.env.XVFB_PATH ||
-  "/nix/store/ykck7gdd6szwrb3qnpb5y5fvjlnmzhz0-xorg-server-21.1.18/bin/Xvfb";
+// Read lazily so dotenv has time to load before these are used
+const getChromiumPath = () => process.env.CHROMIUM_PATH || NIX_CHROMIUM;
+const getXvfbPath     = () => process.env.XVFB_PATH     || NIX_XVFB;
 
 export const STEALTH_UA =
   "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/138.0.0.0 Safari/537.36";
@@ -126,7 +125,7 @@ async function ensureXvfb(): Promise<string> {
   xvfbDisplay = `:${dispNum}`;
 
   await new Promise<void>((resolve, reject) => {
-    xvfbProc = spawn(XVFB_PATH, [
+    xvfbProc = spawn(getXvfbPath(), [
       xvfbDisplay,
       "-screen", "0", "1280x800x24",
       "-ac",
@@ -158,7 +157,7 @@ export async function launchStealthBrowser(headed = false) {
 
   return chromium.launch({
     headless: !headed,
-    executablePath: CHROMIUM_PATH,
+    executablePath: getChromiumPath(),
     args: [...LAUNCH_ARGS, ...extraArgs],
     env: headed ? { ...process.env } : undefined,
   });
