@@ -331,14 +331,19 @@ export default function Home() {
       return `https://${t}`;
     };
     const cleanStep = (s: Step) => {
-      const c = { ...s } as Partial<Step> & { type: string };
-      if (c.listenFor === "") delete c.listenFor;
-      if (c.selector === "") delete c.selector;
-      if ((c as Step & { url?: string }).url === "") delete (c as Step & { url?: string }).url;
-      if (c.text === "") delete c.text;
-      if (c.key === "") delete c.key;
-      if ((c as Step & { value?: string }).value === "") delete (c as Step & { value?: string }).value;
-      if (c.varName === "") delete c.varName;
+      const c: Record<string, unknown> = { ...s };
+      // Strip empty strings
+      if (c["listenFor"] === "") delete c["listenFor"];
+      if (c["selector"] === "") delete c["selector"];
+      if (c["url"] === "") delete c["url"];
+      if (c["text"] === "") delete c["text"];
+      if (c["key"] === "") delete c["key"];
+      if (c["value"] === "") delete c["value"];
+      if (c["varName"] === "") delete c["varName"];
+      // Strip null / NaN from numeric fields (react-hook-form valueAsNumber quirk)
+      for (const k of ["waitMs", "listenTimeout", "popupTimeoutMs", "tabIndex"]) {
+        if (c[k] == null || Number.isNaN(c[k])) delete c[k];
+      }
       return c;
     };
     return {

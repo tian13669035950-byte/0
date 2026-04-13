@@ -62,10 +62,9 @@ function normalizeUrl(url: string): string {
   return `https://${trimmed}`;
 }
 
-// Remove empty-string values from optional enum/string fields so backend validation passes
+// Remove empty / null / NaN values so backend validation passes
 function cleanStep(step: Step): Step {
   const s = { ...step };
-  // Remove empty strings from optional fields that have enum constraints on the backend
   if (s.listenFor === "") delete s.listenFor;
   if (s.selector === "") delete s.selector;
   if (s.url === "") delete s.url;
@@ -73,6 +72,11 @@ function cleanStep(step: Step): Step {
   if (s.key === "") delete s.key;
   if (s.value === "") delete s.value;
   if (s.varName === "") delete s.varName;
+  // Strip null / NaN from numeric fields
+  if (s.waitMs == null || Number.isNaN(s.waitMs)) delete s.waitMs;
+  if (s.listenTimeout == null || Number.isNaN(s.listenTimeout)) delete s.listenTimeout;
+  if (s.popupTimeoutMs == null || Number.isNaN(s.popupTimeoutMs)) delete s.popupTimeoutMs;
+  if (s.tabIndex == null || Number.isNaN(s.tabIndex)) delete s.tabIndex;
   return s;
 }
 

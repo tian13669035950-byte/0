@@ -15,18 +15,18 @@ const CustomSelectorSchema = z.object({
 const ScrapeStepSchema = z.object({
   type: z.enum(["click", "listen", "type", "key", "select", "scroll", "hover", "navigate", "capture", "goback", "goforward", "reload", "wait", "screenshot", "rightclick", "doubleclick", "newtab", "switchtab", "closetab", "waitforvar"]),
   selector: z.string().optional(),
-  waitMs: z.number().optional(),
-  waitForPopupClose: z.boolean().optional(),
-  popupTimeoutMs: z.number().optional(),
+  waitMs: z.number().nullish(),
+  waitForPopupClose: z.boolean().nullish(),
+  popupTimeoutMs: z.number().nullish(),
   listenFor: z.string().optional(),
-  listenTimeout: z.number().optional(),
+  listenTimeout: z.number().nullish(),
   text: z.string().optional(),
   key: z.string().optional(),
   value: z.string().optional(),
   url: z.string().optional(),
   varName: z.string().optional(),
-  incognito: z.boolean().optional(),
-  tabIndex: z.number().optional(),
+  incognito: z.boolean().nullish(),
+  tabIndex: z.number().nullish(),
 });
 
 const ScrapeOptionsSchema = z.object({
