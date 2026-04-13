@@ -25,13 +25,15 @@ import type { ScrapeResult } from "@workspace/api-client-react/src/generated/api
 // ─── Step definitions ────────────────────────────────────────────────────────
 
 const STEP_TYPES = [
-  { type: "click",  label: "点击",     icon: MousePointerClick, color: "blue",   desc: "点击页面上的某个按钮或链接" },
-  { type: "listen", label: "监听",     icon: Eye,               color: "purple", desc: "等到某个元素出现/消失，或网络空闲" },
-  { type: "type",   label: "输入文字", icon: Type,              color: "green",  desc: "在输入框里填入文字" },
-  { type: "key",    label: "按键",     icon: Keyboard,          color: "orange", desc: "模拟键盘按键，如回车、Tab" },
-  { type: "select", label: "下拉选择", icon: ListOrdered,       color: "cyan",   desc: "选择下拉框中的某个选项" },
-  { type: "scroll", label: "滚动",     icon: MoveDown,          color: "pink",   desc: "滚动到指定元素位置" },
-  { type: "hover",  label: "悬停",     icon: Eye,               color: "yellow", desc: "将鼠标悬停在元素上" },
+  { type: "click",    label: "点击",     icon: MousePointerClick, color: "blue",   desc: "点击页面上的某个按钮或链接" },
+  { type: "listen",   label: "监听",     icon: Eye,               color: "purple", desc: "等到某个元素出现/消失，或网络空闲" },
+  { type: "capture",  label: "读取保存", icon: Crosshair,         color: "teal",   desc: "读取元素内容，保存为变量供后续步骤使用" },
+  { type: "navigate", label: "跳转网址", icon: Globe,             color: "indigo", desc: "在同一浏览器内跳转到另一个网址" },
+  { type: "type",     label: "输入文字", icon: Type,              color: "green",  desc: "在输入框填入文字，支持 ${变量名} 引用保存的值" },
+  { type: "key",      label: "按键",     icon: Keyboard,          color: "orange", desc: "模拟键盘按键，如回车、Tab" },
+  { type: "select",   label: "下拉选择", icon: ListOrdered,       color: "cyan",   desc: "选择下拉框中的某个选项" },
+  { type: "scroll",   label: "滚动",     icon: MoveDown,          color: "pink",   desc: "滚动到指定元素位置" },
+  { type: "hover",    label: "悬停",     icon: Eye,               color: "yellow", desc: "将鼠标悬停在元素上" },
 ] as const;
 
 type StepType = typeof STEP_TYPES[number]["type"];
@@ -39,6 +41,8 @@ type StepType = typeof STEP_TYPES[number]["type"];
 const COLOR_MAP: Record<string, { bg: string; border: string; bar: string; btn: string }> = {
   blue:   { bg: "bg-blue-50/60",   border: "border-blue-200",  bar: "bg-blue-400",   btn: "text-blue-600 border-blue-200 hover:bg-blue-50"   },
   purple: { bg: "bg-purple-50/60", border: "border-purple-200",bar: "bg-purple-400", btn: "text-purple-600 border-purple-200 hover:bg-purple-50"},
+  teal:   { bg: "bg-teal-50/60",   border: "border-teal-200",  bar: "bg-teal-400",   btn: "text-teal-600 border-teal-200 hover:bg-teal-50"   },
+  indigo: { bg: "bg-indigo-50/60", border: "border-indigo-200",bar: "bg-indigo-400", btn: "text-indigo-600 border-indigo-200 hover:bg-indigo-50"},
   green:  { bg: "bg-green-50/60",  border: "border-green-200", bar: "bg-green-400",  btn: "text-green-600 border-green-200 hover:bg-green-50" },
   orange: { bg: "bg-orange-50/60", border: "border-orange-200",bar: "bg-orange-400", btn: "text-orange-600 border-orange-200 hover:bg-orange-50"},
   cyan:   { bg: "bg-cyan-50/60",   border: "border-cyan-200",  bar: "bg-cyan-400",   btn: "text-cyan-600 border-cyan-200 hover:bg-cyan-50"   },
@@ -51,7 +55,7 @@ const COMMON_KEYS = ["Enter", "Tab", "Escape", "Space", "ArrowDown", "ArrowUp", 
 // ─── Zod schemas ─────────────────────────────────────────────────────────────
 
 const stepSchema = z.object({
-  type: z.enum(["click", "listen", "type", "key", "select", "scroll", "hover"]),
+  type: z.enum(["click", "listen", "type", "key", "select", "scroll", "hover", "navigate", "capture"]),
   selector: z.string().optional(),
   waitMs: z.number().optional(),
   waitForPopupClose: z.boolean().optional(),
@@ -61,6 +65,8 @@ const stepSchema = z.object({
   text: z.string().optional(),
   key: z.string().optional(),
   value: z.string().optional(),
+  url: z.string().optional(),
+  varName: z.string().optional(),
 });
 
 type Step = z.infer<typeof stepSchema>;
@@ -96,13 +102,15 @@ const sleep = (ms: number) => new Promise<void>((r) => setTimeout(r, ms));
 // ─── Default step factories ───────────────────────────────────────────────────
 
 const defaults: Record<StepType, Partial<Step>> = {
-  click:  { type: "click",  selector: "", waitMs: 1000, waitForPopupClose: false, popupTimeoutMs: 30000 },
-  listen: { type: "listen", selector: "", listenFor: "appear", listenTimeout: 15000 },
-  type:   { type: "type",   selector: "", text: "" },
-  key:    { type: "key",    key: "Enter", waitMs: 500 },
-  select: { type: "select", selector: "", value: "" },
-  scroll: { type: "scroll", selector: "" },
-  hover:  { type: "hover",  selector: "", waitMs: 500 },
+  click:    { type: "click",    selector: "", waitMs: 1000, waitForPopupClose: false, popupTimeoutMs: 30000 },
+  listen:   { type: "listen",   selector: "", listenFor: "appear", listenTimeout: 15000 },
+  capture:  { type: "capture",  selector: "", varName: "" },
+  navigate: { type: "navigate", url: "", waitMs: 1500 },
+  type:     { type: "type",     selector: "", text: "" },
+  key:      { type: "key",      key: "Enter", waitMs: 500 },
+  select:   { type: "select",   selector: "", value: "" },
+  scroll:   { type: "scroll",   selector: "" },
+  hover:    { type: "hover",    selector: "", waitMs: 500 },
 };
 
 // ─── Main component ───────────────────────────────────────────────────────────
@@ -288,6 +296,34 @@ export default function Home() {
                             )} />
                           </>}
 
+                          {s?.type === "capture" && <>
+                            <Field label="要读取的元素选择器">
+                              <Input placeholder="例：#shortid 或 .price-value" className="font-mono text-xs h-7"
+                                {...form.register(`steps.${index}.selector`)} />
+                            </Field>
+                            <Field label="保存为变量名">
+                              <Input placeholder="例：邮箱 或 当前价格" className="text-xs h-7"
+                                {...form.register(`steps.${index}.varName`)} />
+                            </Field>
+                            <p className="text-xs text-muted-foreground bg-teal-50 border border-teal-200 rounded px-2 py-1.5">
+                              保存后，在"输入文字"步骤里用 <code className="font-mono">{"${变量名}"}</code> 引用这个值
+                            </p>
+                          </>}
+
+                          {s?.type === "navigate" && <>
+                            <Field label="跳转到的网址">
+                              <Input placeholder="例：https://b-website.com/form" className="font-mono text-xs h-7"
+                                {...form.register(`steps.${index}.url`)} />
+                            </Field>
+                            <Field label="跳转后等待页面加载（毫秒）">
+                              <Input type="number" className="font-mono text-xs h-7"
+                                {...form.register(`steps.${index}.waitMs`, { valueAsNumber: true })} />
+                            </Field>
+                            <p className="text-xs text-muted-foreground bg-indigo-50 border border-indigo-200 rounded px-2 py-1.5">
+                              在同一个浏览器窗口内跳转，之前保存的变量依然有效
+                            </p>
+                          </>}
+
                           {s?.type === "listen" && <>
                             <Field label="监听条件">
                               <select className="w-full border rounded px-2 py-1 text-xs bg-background"
@@ -315,9 +351,12 @@ export default function Home() {
                                 {...form.register(`steps.${index}.selector`)} />
                             </Field>
                             <Field label="要输入的文字">
-                              <Input placeholder="例：hello@example.com" className="text-xs h-7"
+                              <Input placeholder='例：hello@example.com 或 ${邮箱}' className="text-xs h-7"
                                 {...form.register(`steps.${index}.text`)} />
                             </Field>
+                            <p className="text-xs text-muted-foreground bg-green-50 border border-green-200 rounded px-2 py-1.5">
+                              用 <code className="font-mono">{"${变量名}"}</code> 引用"读取保存"步骤里存的值
+                            </p>
                           </>}
 
                           {s?.type === "key" && <>
@@ -657,7 +696,7 @@ export default function Home() {
               <h3 className="text-lg font-medium text-foreground mb-2">搭好步骤，一键执行</h3>
               <p className="text-sm max-w-sm mb-6">点击"添加步骤"，选择要执行的操作类型，排好顺序，保存为方案，支持循环自动运行。</p>
               <div className="flex items-center gap-4 text-xs font-mono opacity-50">
-                <div className="flex items-center gap-1"><CheckCircle2 className="h-3 w-3" />7 种操作类型</div>
+                <div className="flex items-center gap-1"><CheckCircle2 className="h-3 w-3" />9 种操作类型</div>
                 <div className="flex items-center gap-1"><CheckCircle2 className="h-3 w-3" />保存复用</div>
                 <div className="flex items-center gap-1"><CheckCircle2 className="h-3 w-3" />支持循环</div>
               </div>

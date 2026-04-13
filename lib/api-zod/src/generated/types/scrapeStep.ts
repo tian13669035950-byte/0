@@ -9,7 +9,7 @@ import type { ScrapeStepListenFor } from "./scrapeStepListenFor";
 import type { ScrapeStepType } from "./scrapeStepType";
 
 export interface ScrapeStep {
-  /** click: click element; listen: wait for element/network condition; type: type text into input; key: press a keyboard key; select: choose dropdown option; scroll: scroll to element; hover: hover over element
+  /** click: click element; listen: wait for element/network condition; type: type text into input; key: press a keyboard key; select: choose dropdown option; scroll: scroll to element; hover: hover over element; navigate: go to a different URL in the same session; capture: read element value and save as a named variable
    */
   type: ScrapeStepType;
   /** CSS selector (click, listen, type, select, scroll, hover) */
@@ -30,4 +30,8 @@ export interface ScrapeStep {
   key?: string;
   /** (select) Option value or label to select */
   value?: string;
+  /** (navigate) URL to navigate to in the same browser session */
+  url?: string;
+  /** (capture) Variable name to store the captured value under */
+  varName?: string;
 }

@@ -65,9 +65,11 @@ export const StartScrapeBody = zod.object({
               "select",
               "scroll",
               "hover",
+              "navigate",
+              "capture",
             ])
             .describe(
-              "click: click element; listen: wait for element\/network condition; type: type text into input; key: press a keyboard key; select: choose dropdown option; scroll: scroll to element; hover: hover over element\n",
+              "click: click element; listen: wait for element\/network condition; type: type text into input; key: press a keyboard key; select: choose dropdown option; scroll: scroll to element; hover: hover over element; navigate: go to a different URL in the same session; capture: read element value and save as a named variable\n",
             ),
           selector: zod
             .string()
@@ -107,6 +109,18 @@ export const StartScrapeBody = zod.object({
             .string()
             .optional()
             .describe("(select) Option value or label to select"),
+          url: zod
+            .string()
+            .optional()
+            .describe(
+              "(navigate) URL to navigate to in the same browser session",
+            ),
+          varName: zod
+            .string()
+            .optional()
+            .describe(
+              "(capture) Variable name to store the captured value under",
+            ),
         }),
       )
       .optional()

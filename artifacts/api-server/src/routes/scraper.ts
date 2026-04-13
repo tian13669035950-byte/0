@@ -11,7 +11,7 @@ const CustomSelectorSchema = z.object({
 });
 
 const ScrapeStepSchema = z.object({
-  type: z.enum(["click", "listen", "type", "key", "select", "scroll", "hover"]),
+  type: z.enum(["click", "listen", "type", "key", "select", "scroll", "hover", "navigate", "capture"]),
   selector: z.string().optional(),
   waitMs: z.number().optional(),
   waitForPopupClose: z.boolean().optional(),
@@ -21,6 +21,8 @@ const ScrapeStepSchema = z.object({
   text: z.string().optional(),
   key: z.string().optional(),
   value: z.string().optional(),
+  url: z.string().optional(),
+  varName: z.string().optional(),
 });
 
 const ScrapeOptionsSchema = z.object({
@@ -84,6 +86,12 @@ router.post("/scrape", async (req, res) => {
     await page.waitForTimeout(1500);
 
     let clickedElement: string | undefined;
+    // Captured variables: populated by "capture" steps, consumed by "type" steps via ${varName}
+    const vars: Record<string, string> = {};
+
+    // Resolve ${varName} placeholders in a string
+    const resolveVars = (str: string): string =>
+      str.replace(/\$\{([^}]+)\}/g, (_, name) => vars[name.trim()] ?? "");
 
     // Build the effective step list: prefer `steps` array; fall back to legacy clickSelector
     const effectiveSteps = options.steps && options.steps.length > 0
@@ -147,12 +155,59 @@ router.post("/scrape", async (req, res) => {
           req.log.warn({ selector }, "Click step: element not found");
         }
 
+      } else if (step.type === "navigate" && step.url?.trim()) {
+        const targetUrl = resolveVars(step.url.trim());
+        req.log.info({ url: targetUrl }, "Navigating to new URL");
+        await page.goto(targetUrl, { waitUntil: "domcontentloaded", timeout: 20000 });
+        await page.waitForTimeout(step.waitMs ?? 1500);
+
+      } else if (step.type === "capture" && step.selector?.trim() && step.varName?.trim()) {
+        const selector = step.selector.trim();
+        const varName = step.varName.trim();
+        try {
+          // Check main page first, then iframes
+          let captured = await page.evaluate((sel) => {
+            const el = document.querySelector(sel);
+            if (!el) return null;
+            if (el instanceof HTMLInputElement || el instanceof HTMLTextAreaElement || el instanceof HTMLSelectElement)
+              return el.value?.trim() || el.getAttribute("placeholder") || "";
+            return el.textContent?.trim() || "";
+          }, selector);
+
+          if (!captured) {
+            for (const frame of page.frames()) {
+              if (frame === page.mainFrame()) continue;
+              try {
+                const v = await frame.evaluate((sel) => {
+                  const el = document.querySelector(sel);
+                  if (!el) return null;
+                  if (el instanceof HTMLInputElement || el instanceof HTMLTextAreaElement || el instanceof HTMLSelectElement)
+                    return el.value?.trim() || "";
+                  return el.textContent?.trim() || "";
+                }, selector);
+                if (v) { captured = v; break; }
+              } catch { /* cross-origin */ }
+            }
+          }
+
+          if (captured) {
+            vars[varName] = captured;
+            req.log.info({ selector, varName, value: captured }, "Captured variable");
+          } else {
+            req.log.warn({ selector, varName }, "Capture: element not found");
+          }
+          if (step.waitMs) await page.waitForTimeout(step.waitMs);
+        } catch {
+          req.log.warn({ selector }, "Capture step failed");
+        }
+
       } else if (step.type === "type" && step.selector?.trim() && step.text) {
         const selector = step.selector.trim();
+        const resolvedText = resolveVars(step.text);
         try {
           await page.waitForSelector(selector, { timeout: 8000 });
-          await page.fill(selector, step.text);
-          req.log.info({ selector, text: step.text }, "Typed text");
+          await page.fill(selector, resolvedText);
+          req.log.info({ selector, text: resolvedText }, "Typed text");
           if (step.waitMs) await page.waitForTimeout(step.waitMs);
         } catch {
           req.log.warn({ selector }, "Type step: element not found");
