@@ -23,6 +23,7 @@ const ScrapeStepSchema = z.object({
   value: z.string().optional(),
   url: z.string().optional(),
   varName: z.string().optional(),
+  incognito: z.boolean().optional(),
 });
 
 const ScrapeOptionsSchema = z.object({
@@ -76,11 +77,13 @@ router.post("/scrape", async (req, res) => {
       args: ["--no-sandbox", "--disable-setuid-sandbox", "--disable-dev-shm-usage"],
     });
 
-    const page = await browser.newPage();
-    await page.setExtraHTTPHeaders({
-      "User-Agent":
-        "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/120.0.0.0 Safari/537.36",
-    });
+    const UA = "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/120.0.0.0 Safari/537.36";
+
+    // Helper: open a fresh browser context (optionally incognito = new isolated context)
+    const newContext = () => browser!.newContext({ userAgent: UA });
+
+    let ctx = await newContext();
+    let page = await ctx.newPage();
 
     await page.goto(url, { waitUntil: "domcontentloaded", timeout: 20000 });
     await page.waitForTimeout(1500);
@@ -157,7 +160,14 @@ router.post("/scrape", async (req, res) => {
 
       } else if (step.type === "navigate" && step.url?.trim()) {
         const targetUrl = resolveVars(step.url.trim());
-        req.log.info({ url: targetUrl }, "Navigating to new URL");
+        const useIncognito = step.incognito !== false; // default true
+        req.log.info({ url: targetUrl, incognito: useIncognito }, "Navigating to new URL");
+        if (useIncognito) {
+          // Close current context and open a brand-new isolated one (no cookies/storage from before)
+          await ctx.close();
+          ctx = await newContext();
+          page = await ctx.newPage();
+        }
         await page.goto(targetUrl, { waitUntil: "domcontentloaded", timeout: 20000 });
         await page.waitForTimeout(step.waitMs ?? 1500);
 

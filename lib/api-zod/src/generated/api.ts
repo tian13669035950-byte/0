@@ -121,6 +121,12 @@ export const StartScrapeBody = zod.object({
             .describe(
               "(capture) Variable name to store the captured value under",
             ),
+          incognito: zod
+            .boolean()
+            .optional()
+            .describe(
+              "(navigate) When true (default), opens a fresh isolated browser context with no cookies from previous steps",
+            ),
         }),
       )
       .optional()

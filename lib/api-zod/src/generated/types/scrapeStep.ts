@@ -34,4 +34,6 @@ export interface ScrapeStep {
   url?: string;
   /** (capture) Variable name to store the captured value under */
   varName?: string;
+  /** (navigate) When true (default), opens a fresh isolated browser context with no cookies from previous steps */
+  incognito?: boolean;
 }

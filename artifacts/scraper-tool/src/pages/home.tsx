@@ -67,6 +67,7 @@ const stepSchema = z.object({
   value: z.string().optional(),
   url: z.string().optional(),
   varName: z.string().optional(),
+  incognito: z.boolean().optional(),
 });
 
 type Step = z.infer<typeof stepSchema>;
@@ -105,7 +106,7 @@ const defaults: Record<StepType, Partial<Step>> = {
   click:    { type: "click",    selector: "", waitMs: 1000, waitForPopupClose: false, popupTimeoutMs: 30000 },
   listen:   { type: "listen",   selector: "", listenFor: "appear", listenTimeout: 15000 },
   capture:  { type: "capture",  selector: "", varName: "" },
-  navigate: { type: "navigate", url: "", waitMs: 1500 },
+  navigate: { type: "navigate", url: "", waitMs: 1500, incognito: true },
   type:     { type: "type",     selector: "", text: "" },
   key:      { type: "key",      key: "Enter", waitMs: 500 },
   select:   { type: "select",   selector: "", value: "" },
@@ -319,8 +320,15 @@ export default function Home() {
                               <Input type="number" className="font-mono text-xs h-7"
                                 {...form.register(`steps.${index}.waitMs`, { valueAsNumber: true })} />
                             </Field>
+                            <label className="flex items-center gap-2 cursor-pointer select-none">
+                              <input type="checkbox" className="rounded"
+                                {...form.register(`steps.${index}.incognito`)} />
+                              <span className="text-xs font-medium">无痕跳转（隐身模式）</span>
+                            </label>
                             <p className="text-xs text-muted-foreground bg-indigo-50 border border-indigo-200 rounded px-2 py-1.5">
-                              在同一个浏览器窗口内跳转，之前保存的变量依然有效
+                              ✓ 勾选后跳转时完全隔离 Cookie 和登录状态，B 网站看不到 A 网站的任何数据<br/>
+                              · 之前"读取保存"的变量仍然有效，只隔离浏览器状态<br/>
+                              · 每次循环结束后浏览器自动完全重置，下一轮从全新状态开始
                             </p>
                           </>}
 

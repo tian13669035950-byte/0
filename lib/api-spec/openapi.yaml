@@ -181,6 +181,9 @@ components:
         varName:
           type: string
           description: (capture) Variable name to store the captured value under
+        incognito:
+          type: boolean
+          description: (navigate) When true (default), opens a fresh isolated browser context with no cookies from previous steps
       required:
         - type
     CustomSelector:
