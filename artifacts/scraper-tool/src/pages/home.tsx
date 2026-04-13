@@ -223,6 +223,7 @@ export default function Home() {
   const [recPickedSelector, setRecPickedSelector] = useState<string | null>(null);
   const [recPickedLabel, setRecPickedLabel] = useState<string>("");
   const [recVars, setRecVars] = useState<Record<string, string>>({});
+  const [recManualSel, setRecManualSel] = useState(false); // manual CSS input mode
   const overlayRef = useRef<HTMLDivElement>(null);
   const esRef = useRef<EventSource | null>(null);
   const recStepIdRef = useRef(0);
@@ -385,6 +386,7 @@ export default function Home() {
     setRecPickedSelector(null);
     setRecPickedLabel("");
     setRecVars({});
+    setRecManualSel(false);
   }, [sessionId]);
 
   const connectStream = useCallback((sid: string) => {
@@ -1431,8 +1433,8 @@ export default function Home() {
       // In mode 2, phase 1 = waiting for page click; phase 2 = selector detected, show form
       const pickPhase1 = isPickThenFillMode && recPickedSelector === null;
       const pickPhase2 = isPickThenFillMode && recPickedSelector !== null;
-      // Either mode makes the overlay clickable
-      const overlayClickable = (isClickPickMode || pickPhase1) && !recStepPending;
+      // Either mode makes the overlay clickable (but not when user is typing a manual selector)
+      const overlayClickable = (isClickPickMode || (pickPhase1 && !recManualSel)) && !recStepPending;
 
       // Fields shown per step type
       const needsSelector = false; // always auto-detected for pick-then-fill; hidden for click-pick
@@ -1576,7 +1578,7 @@ export default function Home() {
                             {recStepPending ? "执行中，请稍候…" : `点击页面元素 → 自动执行「${recStepDef?.label}」并记录`}
                           </span>
                         </div>
-                      ) : pickPhase1 ? (
+                      ) : pickPhase1 && !recManualSel ? (
                         /* Mode 2 phase 1: waiting for element click */
                         <div className="absolute bottom-3 left-2 right-2 flex justify-center">
                           <span className="text-xs bg-amber-600/95 text-white rounded-lg px-3 py-1.5 flex items-center gap-2 shadow-lg">
@@ -1630,8 +1632,8 @@ export default function Home() {
                         type="button"
                         disabled={recStepPending}
                         onClick={() => {
-                          if (active) { setRecFormType(null); setRecFormValues({}); setRecPickedSelector(null); setRecPickedLabel(""); }
-                          else { setRecFormType(type); setRecFormValues({}); setRecPickedSelector(null); setRecPickedLabel(""); }
+                          if (active) { setRecFormType(null); setRecFormValues({}); setRecPickedSelector(null); setRecPickedLabel(""); setRecManualSel(false); }
+                          else { setRecFormType(type); setRecFormValues({}); setRecPickedSelector(null); setRecPickedLabel(""); setRecManualSel(false); }
                         }}
                         className={`
                           flex flex-col items-center gap-1 px-1 py-1.5 rounded-md text-center transition-all border text-[10px] font-medium
@@ -1654,7 +1656,7 @@ export default function Home() {
                     <div className="flex items-center gap-2 mb-1">
                       {RecStepIcon && <RecStepIcon className="h-3.5 w-3.5 text-zinc-300" />}
                       <span className="text-xs font-semibold text-zinc-200">{recStepDef?.label}</span>
-                      <button type="button" onClick={() => { setRecFormType(null); setRecFormValues({}); setRecPickedSelector(null); setRecPickedLabel(""); }}
+                      <button type="button" onClick={() => { setRecFormType(null); setRecFormValues({}); setRecPickedSelector(null); setRecPickedLabel(""); setRecManualSel(false); }}
                         className="ml-auto text-[10px] text-zinc-500 hover:text-zinc-300 transition-colors px-2 py-0.5 rounded bg-zinc-800 border border-zinc-700">
                         取消
                       </button>
@@ -1670,13 +1672,54 @@ export default function Home() {
                       </div>
                     )}
 
-                    {/* Mode 2 phase 1 — pick-then-fill: waiting for element click */}
-                    {pickPhase1 && (
+                    {/* Mode 2 phase 1 — pick-then-fill: waiting for element click or manual input */}
+                    {pickPhase1 && !recManualSel && (
                       <div className="flex items-center gap-2 py-1.5 px-2 rounded-md bg-amber-900/40 border border-amber-700/50">
                         <span className="inline-block w-2 h-2 rounded-full bg-amber-400 animate-pulse shrink-0" />
-                        <span className="text-xs text-amber-200">
+                        <span className="text-xs text-amber-200 flex-1">
                           {recStepPending ? "正在识别元素…" : "点击上方截图中的目标元素，自动识别选择器"}
                         </span>
+                        {!recStepPending && (
+                          <button type="button"
+                            onClick={() => setRecManualSel(true)}
+                            className="text-[10px] text-zinc-400 hover:text-zinc-100 bg-zinc-700 hover:bg-zinc-600 border border-zinc-600 rounded px-1.5 py-0.5 shrink-0 transition-colors">
+                            手动输入
+                          </button>
+                        )}
+                      </div>
+                    )}
+                    {pickPhase1 && recManualSel && (
+                      <div className="space-y-1.5">
+                        <label className="text-[10px] text-zinc-400 block">手动输入 CSS 选择器</label>
+                        <div className="flex gap-1.5">
+                          <input
+                            autoFocus
+                            type="text"
+                            value={String(recFormValues.selector ?? "")}
+                            onChange={e => setRecFormValues(prev => ({ ...prev, selector: e.target.value }))}
+                            placeholder="#id、.class、input[name='q'] …"
+                            className="flex-1 px-2 py-1 text-xs rounded bg-zinc-800 text-zinc-100 border border-zinc-600 placeholder:text-zinc-500 focus:outline-none focus:border-blue-500 font-mono"
+                            onKeyDown={e => {
+                              if (e.key === "Enter") {
+                                const sel = String(recFormValues.selector ?? "").trim();
+                                if (sel) { setRecPickedSelector(sel); setRecPickedLabel(""); setRecManualSel(false); }
+                              }
+                            }}
+                          />
+                          <button type="button"
+                            onClick={() => {
+                              const sel = String(recFormValues.selector ?? "").trim();
+                              if (sel) { setRecPickedSelector(sel); setRecPickedLabel(""); setRecManualSel(false); }
+                            }}
+                            className="px-2 py-1 text-xs rounded bg-blue-600 hover:bg-blue-500 text-white border border-blue-500 transition-colors shrink-0">
+                            确认
+                          </button>
+                          <button type="button"
+                            onClick={() => setRecManualSel(false)}
+                            className="px-2 py-1 text-xs rounded bg-zinc-700 hover:bg-zinc-600 text-zinc-300 border border-zinc-600 transition-colors shrink-0">
+                            返回
+                          </button>
+                        </div>
                       </div>
                     )}
 
