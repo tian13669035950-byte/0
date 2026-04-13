@@ -11,11 +11,16 @@ const CustomSelectorSchema = z.object({
 });
 
 const ScrapeStepSchema = z.object({
-  type: z.enum(["click", "wait"]),
+  type: z.enum(["click", "listen", "type", "key", "select", "scroll", "hover"]),
   selector: z.string().optional(),
   waitMs: z.number().optional(),
   waitForPopupClose: z.boolean().optional(),
   popupTimeoutMs: z.number().optional(),
+  listenFor: z.enum(["appear", "disappear", "networkIdle"]).optional(),
+  listenTimeout: z.number().optional(),
+  text: z.string().optional(),
+  key: z.string().optional(),
+  value: z.string().optional(),
 });
 
 const ScrapeOptionsSchema = z.object({
@@ -94,37 +99,107 @@ router.post("/scrape", async (req, res) => {
         : [];
 
     for (const step of effectiveSteps) {
-      if (step.type === "wait") {
-        const ms = step.waitMs ?? 1000;
-        req.log.info({ ms }, "Executing wait step");
-        await page.waitForTimeout(ms);
+      req.log.info({ type: step.type }, "Executing step");
+
+      if (step.type === "listen") {
+        const timeout = step.listenTimeout ?? 15000;
+        const condition = step.listenFor ?? "appear";
+        try {
+          if (condition === "networkIdle") {
+            await page.waitForLoadState("networkidle", { timeout });
+          } else if (step.selector?.trim()) {
+            const sel = step.selector.trim();
+            if (condition === "appear") {
+              await page.waitForSelector(sel, { state: "visible", timeout });
+            } else if (condition === "disappear") {
+              await page.waitForSelector(sel, { state: "hidden", timeout });
+            }
+          }
+          req.log.info({ condition, selector: step.selector }, "Listen condition met");
+        } catch {
+          req.log.warn({ condition, selector: step.selector }, "Listen timed out, continuing");
+        }
+        if (step.waitMs) await page.waitForTimeout(step.waitMs);
+
       } else if (step.type === "click" && step.selector?.trim()) {
         const selector = step.selector.trim();
         try {
-          await page.waitForSelector(selector, { timeout: 5000 });
+          await page.waitForSelector(selector, { timeout: 8000 });
           if (step.waitForPopupClose) {
             const popupTimeout = step.popupTimeoutMs ?? 30000;
             const popupPromise = page.context().waitForEvent("page", { timeout: popupTimeout });
             await page.click(selector);
             clickedElement = selector;
-            req.log.info({ selector }, "Clicked element, waiting for popup");
             try {
               const popup = await popupPromise;
               req.log.info({ url: popup.url() }, "Popup detected, waiting for close");
               await popup.waitForEvent("close", { timeout: popupTimeout });
               req.log.info("Popup closed");
             } catch {
-              req.log.warn("Popup timed out, using fixed wait");
+              req.log.warn("Popup wait timed out");
             }
           } else {
             await page.click(selector);
             clickedElement = selector;
-            req.log.info({ selector }, "Clicked element");
           }
-          const waitMs = step.waitMs ?? 2000;
-          await page.waitForTimeout(waitMs);
+          if (step.waitMs) await page.waitForTimeout(step.waitMs);
         } catch {
-          req.log.warn({ selector }, "Click step failed: element not found");
+          req.log.warn({ selector }, "Click step: element not found");
+        }
+
+      } else if (step.type === "type" && step.selector?.trim() && step.text) {
+        const selector = step.selector.trim();
+        try {
+          await page.waitForSelector(selector, { timeout: 8000 });
+          await page.fill(selector, step.text);
+          req.log.info({ selector, text: step.text }, "Typed text");
+          if (step.waitMs) await page.waitForTimeout(step.waitMs);
+        } catch {
+          req.log.warn({ selector }, "Type step: element not found");
+        }
+
+      } else if (step.type === "key" && step.key) {
+        await page.keyboard.press(step.key);
+        req.log.info({ key: step.key }, "Pressed key");
+        if (step.waitMs) await page.waitForTimeout(step.waitMs);
+
+      } else if (step.type === "select" && step.selector?.trim() && step.value) {
+        const selector = step.selector.trim();
+        try {
+          await page.waitForSelector(selector, { timeout: 8000 });
+          await page.selectOption(selector, { label: step.value }).catch(() =>
+            page.selectOption(selector, { value: step.value! })
+          );
+          req.log.info({ selector, value: step.value }, "Selected option");
+          if (step.waitMs) await page.waitForTimeout(step.waitMs);
+        } catch {
+          req.log.warn({ selector }, "Select step: element not found");
+        }
+
+      } else if (step.type === "scroll") {
+        if (step.selector?.trim()) {
+          try {
+            const el = page.locator(step.selector.trim()).first();
+            await el.scrollIntoViewIfNeeded();
+            req.log.info({ selector: step.selector }, "Scrolled to element");
+          } catch {
+            req.log.warn({ selector: step.selector }, "Scroll: element not found");
+          }
+        } else {
+          await page.mouse.wheel(0, step.waitMs ?? 300);
+          req.log.info("Scrolled page");
+        }
+        if (step.waitMs) await page.waitForTimeout(step.waitMs);
+
+      } else if (step.type === "hover" && step.selector?.trim()) {
+        const selector = step.selector.trim();
+        try {
+          await page.waitForSelector(selector, { timeout: 8000 });
+          await page.hover(selector);
+          req.log.info({ selector }, "Hovered");
+          if (step.waitMs) await page.waitForTimeout(step.waitMs);
+        } catch {
+          req.log.warn({ selector }, "Hover: element not found");
         }
       }
     }

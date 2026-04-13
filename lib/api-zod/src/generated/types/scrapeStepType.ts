@@ -7,12 +7,18 @@
  */
 
 /**
- * click: click an element; wait: pause for N ms
+ * click: click element; listen: wait for element/network condition; type: type text into input; key: press a keyboard key; select: choose dropdown option; scroll: scroll to element; hover: hover over element
+
  */
 export type ScrapeStepType =
   (typeof ScrapeStepType)[keyof typeof ScrapeStepType];
 
 export const ScrapeStepType = {
   click: "click",
-  wait: "wait",
+  listen: "listen",
+  type: "type",
+  key: "key",
+  select: "select",
+  scroll: "scroll",
+  hover: "hover",
 } as const;

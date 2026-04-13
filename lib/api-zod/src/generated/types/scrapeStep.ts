@@ -5,17 +5,29 @@
  * API specification
  * OpenAPI spec version: 0.1.0
  */
+import type { ScrapeStepListenFor } from "./scrapeStepListenFor";
 import type { ScrapeStepType } from "./scrapeStepType";
 
 export interface ScrapeStep {
-  /** click: click an element; wait: pause for N ms */
+  /** click: click element; listen: wait for element/network condition; type: type text into input; key: press a keyboard key; select: choose dropdown option; scroll: scroll to element; hover: hover over element
+   */
   type: ScrapeStepType;
-  /** CSS selector (required for click steps) */
+  /** CSS selector (click, listen, type, select, scroll, hover) */
   selector?: string;
-  /** Milliseconds to wait (for wait steps, or after a click) */
+  /** Additional ms to wait after this step completes */
   waitMs?: number;
-  /** Wait for a popup to open and close after this click */
+  /** (click) Wait for a popup to open and close */
   waitForPopupClose?: boolean;
-  /** Max ms to wait for popup to close */
+  /** (click) Max ms to wait for popup close */
   popupTimeoutMs?: number;
+  /** (listen) Condition to wait for */
+  listenFor?: ScrapeStepListenFor;
+  /** (listen) Max ms before giving up */
+  listenTimeout?: number;
+  /** (type) Text to type into the input */
+  text?: string;
+  /** (key) Key to press, e.g. Enter, Tab, Escape, ArrowDown */
+  key?: string;
+  /** (select) Option value or label to select */
+  value?: string;
 }

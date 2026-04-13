@@ -57,26 +57,56 @@ export const StartScrapeBody = zod.object({
       .array(
         zod.object({
           type: zod
-            .enum(["click", "wait"])
-            .describe("click: click an element; wait: pause for N ms"),
+            .enum([
+              "click",
+              "listen",
+              "type",
+              "key",
+              "select",
+              "scroll",
+              "hover",
+            ])
+            .describe(
+              "click: click element; listen: wait for element\/network condition; type: type text into input; key: press a keyboard key; select: choose dropdown option; scroll: scroll to element; hover: hover over element\n",
+            ),
           selector: zod
             .string()
             .optional()
-            .describe("CSS selector (required for click steps)"),
+            .describe(
+              "CSS selector (click, listen, type, select, scroll, hover)",
+            ),
           waitMs: zod
             .number()
             .optional()
-            .describe(
-              "Milliseconds to wait (for wait steps, or after a click)",
-            ),
+            .describe("Additional ms to wait after this step completes"),
           waitForPopupClose: zod
             .boolean()
             .optional()
-            .describe("Wait for a popup to open and close after this click"),
+            .describe("(click) Wait for a popup to open and close"),
           popupTimeoutMs: zod
             .number()
             .optional()
-            .describe("Max ms to wait for popup to close"),
+            .describe("(click) Max ms to wait for popup close"),
+          listenFor: zod
+            .enum(["appear", "disappear", "networkIdle"])
+            .optional()
+            .describe("(listen) Condition to wait for"),
+          listenTimeout: zod
+            .number()
+            .optional()
+            .describe("(listen) Max ms before giving up"),
+          text: zod
+            .string()
+            .optional()
+            .describe("(type) Text to type into the input"),
+          key: zod
+            .string()
+            .optional()
+            .describe("(key) Key to press, e.g. Enter, Tab, Escape, ArrowDown"),
+          value: zod
+            .string()
+            .optional()
+            .describe("(select) Option value or label to select"),
         }),
       )
       .optional()

@@ -136,20 +136,43 @@ components:
       properties:
         type:
           type: string
-          enum: [click, wait]
-          description: "click: click an element; wait: pause for N ms"
+          enum: [click, listen, type, key, select, scroll, hover]
+          description: >
+            click: click element;
+            listen: wait for element/network condition;
+            type: type text into input;
+            key: press a keyboard key;
+            select: choose dropdown option;
+            scroll: scroll to element;
+            hover: hover over element
         selector:
           type: string
-          description: CSS selector (required for click steps)
+          description: CSS selector (click, listen, type, select, scroll, hover)
         waitMs:
           type: number
-          description: Milliseconds to wait (for wait steps, or after a click)
+          description: Additional ms to wait after this step completes
         waitForPopupClose:
           type: boolean
-          description: Wait for a popup to open and close after this click
+          description: (click) Wait for a popup to open and close
         popupTimeoutMs:
           type: number
-          description: Max ms to wait for popup to close
+          description: (click) Max ms to wait for popup close
+        listenFor:
+          type: string
+          enum: [appear, disappear, networkIdle]
+          description: (listen) Condition to wait for
+        listenTimeout:
+          type: number
+          description: (listen) Max ms before giving up
+        text:
+          type: string
+          description: (type) Text to type into the input
+        key:
+          type: string
+          description: (key) Key to press, e.g. Enter, Tab, Escape, ArrowDown
+        value:
+          type: string
+          description: (select) Option value or label to select
       required:
         - type
     CustomSelector:

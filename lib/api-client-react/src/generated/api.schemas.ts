@@ -17,27 +17,56 @@ export interface CustomSelector {
 }
 
 /**
- * click: click an element; wait: pause for N ms
+ * click: click element; listen: wait for element/network condition; type: type text into input; key: press a keyboard key; select: choose dropdown option; scroll: scroll to element; hover: hover over element
+
  */
 export type ScrapeStepType =
   (typeof ScrapeStepType)[keyof typeof ScrapeStepType];
 
 export const ScrapeStepType = {
   click: "click",
-  wait: "wait",
+  listen: "listen",
+  type: "type",
+  key: "key",
+  select: "select",
+  scroll: "scroll",
+  hover: "hover",
+} as const;
+
+/**
+ * (listen) Condition to wait for
+ */
+export type ScrapeStepListenFor =
+  (typeof ScrapeStepListenFor)[keyof typeof ScrapeStepListenFor];
+
+export const ScrapeStepListenFor = {
+  appear: "appear",
+  disappear: "disappear",
+  networkIdle: "networkIdle",
 } as const;
 
 export interface ScrapeStep {
-  /** click: click an element; wait: pause for N ms */
+  /** click: click element; listen: wait for element/network condition; type: type text into input; key: press a keyboard key; select: choose dropdown option; scroll: scroll to element; hover: hover over element
+   */
   type: ScrapeStepType;
-  /** CSS selector (required for click steps) */
+  /** CSS selector (click, listen, type, select, scroll, hover) */
   selector?: string;
-  /** Milliseconds to wait (for wait steps, or after a click) */
+  /** Additional ms to wait after this step completes */
   waitMs?: number;
-  /** Wait for a popup to open and close after this click */
+  /** (click) Wait for a popup to open and close */
   waitForPopupClose?: boolean;
-  /** Max ms to wait for popup to close */
+  /** (click) Max ms to wait for popup close */
   popupTimeoutMs?: number;
+  /** (listen) Condition to wait for */
+  listenFor?: ScrapeStepListenFor;
+  /** (listen) Max ms before giving up */
+  listenTimeout?: number;
+  /** (type) Text to type into the input */
+  text?: string;
+  /** (key) Key to press, e.g. Enter, Tab, Escape, ArrowDown */
+  key?: string;
+  /** (select) Option value or label to select */
+  value?: string;
 }
 
 export interface ScrapeOptions {
