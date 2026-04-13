@@ -1256,15 +1256,23 @@ export default function Home() {
             </Card>
           )}
 
-          {/* Inline live browser view — shown during execution once watchId is ready */}
-          {isRunning && watchId && (
+          {/* Inline live browser view — shown during execution and persists with last screenshot after completion */}
+          {(isRunning ? !!watchId : !!watchShot) && (
             <Card className="overflow-hidden border-zinc-700 shadow-md animate-in fade-in">
               <div className="flex items-center gap-2 px-3 py-2 bg-zinc-900 border-b border-zinc-700 shrink-0">
-                <span className="relative flex h-2 w-2 shrink-0">
-                  <span className="animate-ping absolute inline-flex h-full w-full rounded-full bg-violet-400 opacity-75" />
-                  <span className="relative inline-flex rounded-full h-2 w-2 bg-violet-500" />
+                {isRunning ? (
+                  <span className="relative flex h-2 w-2 shrink-0">
+                    <span className="animate-ping absolute inline-flex h-full w-full rounded-full bg-violet-400 opacity-75" />
+                    <span className="relative inline-flex rounded-full h-2 w-2 bg-violet-500" />
+                  </span>
+                ) : (
+                  <span className="relative flex h-2 w-2 shrink-0">
+                    <span className="relative inline-flex rounded-full h-2 w-2 bg-emerald-500" />
+                  </span>
+                )}
+                <span className="text-xs font-semibold text-violet-300">
+                  {isRunning ? "实时浏览器视图" : "浏览器截图（已完成）"}
                 </span>
-                <span className="text-xs font-semibold text-violet-300">实时浏览器视图</span>
                 {watchUrl && <span className="flex-1 text-[10px] font-mono text-zinc-400 truncate">{watchUrl}</span>}
                 <span className="text-[10px] text-zinc-500 hidden sm:inline">只读 · 不影响执行</span>
               </div>
