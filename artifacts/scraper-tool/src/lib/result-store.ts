@@ -34,6 +34,8 @@ export const addItemToStore = (item: Omit<CollectedItem, "id" | "note">): Collec
   return full;
 };
 
+export const addRawItemToStore = (item: CollectedItem): void => save([item, ...loadItems()]);
+
 export const deleteItemFromStore = (id: string) => save(loadItems().filter(i => i.id !== id));
 
 export const updateItemInStore = (id: string, patch: Partial<Pick<CollectedItem, "note" | "capturedVars">>) =>
