@@ -190,18 +190,63 @@ router.post("/scrape", async (req, res) => {
         })
       : [];
 
-    const customResults: { name: string; selector: string; values: string[] }[] = [];
+    // Helper: extract values from a frame (page or iframe)
+    async function extractFromFrame(
+      frame: import("playwright-core").Frame,
+      selector: string
+    ): Promise<string[]> {
+      return frame.evaluate((sel) => {
+        const els = document.querySelectorAll(sel);
+        return Array.from(els)
+          .map((el) => {
+            // For inputs/selects/textareas return their value
+            if (
+              el instanceof HTMLInputElement ||
+              el instanceof HTMLTextAreaElement ||
+              el instanceof HTMLSelectElement
+            ) {
+              return el.value?.trim() || el.getAttribute("placeholder")?.trim() || "";
+            }
+            return el.textContent?.trim() || "";
+          })
+          .filter((t) => t.length > 0)
+          .slice(0, 50);
+      }, selector);
+    }
+
+    const customResults: { name: string; selector: string; values: string[]; foundIn?: string }[] = [];
     if (options.customSelectors && options.customSelectors.length > 0) {
       for (const cs of options.customSelectors) {
         if (!cs.selector.trim()) continue;
-        const values = await page.evaluate((sel) => {
-          const els = document.querySelectorAll(sel);
-          return Array.from(els)
-            .map((el) => el.textContent?.trim() || "")
-            .filter((t) => t.length > 0)
-            .slice(0, 50);
-        }, cs.selector);
+
+        // 1. Try main page first
+        let values = await extractFromFrame(page.mainFrame(), cs.selector);
+        let foundIn = "main";
+
+        // 2. If not found, search all iframes
+        if (values.length === 0) {
+          for (const frame of page.frames()) {
+            if (frame === page.mainFrame()) continue;
+            try {
+              const iframeValues = await extractFromFrame(frame, cs.selector);
+              if (iframeValues.length > 0) {
+                values = iframeValues;
+                foundIn = `iframe(${frame.url()})`;
+                req.log.info({ selector: cs.selector, frame: frame.url() }, "Found selector inside iframe");
+                break;
+              }
+            } catch {
+              // iframe may be cross-origin, skip
+            }
+          }
+        }
+
         customResults.push({ name: cs.name, selector: cs.selector, values });
+        if (values.length === 0) {
+          req.log.warn({ selector: cs.selector }, "Selector not found in main page or any iframe");
+        } else {
+          req.log.info({ selector: cs.selector, foundIn, count: values.length }, "Selector matched");
+        }
       }
     }
 
