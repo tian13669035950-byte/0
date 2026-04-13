@@ -145,6 +145,21 @@ async function ensureXvfb(): Promise<string> {
 
 // ─── Browser launch ───────────────────────────────────────────────────────────
 
+/** Detect which browser is configured and return the right private-mode flag */
+function getPrivateModeArg(): string | null {
+  const p = getChromiumPath().toLowerCase();
+  // Edge (Windows: msedge.exe, macOS: Microsoft Edge)
+  if (p.includes("msedge") || p.includes("microsoft edge") || p.includes("edge")) {
+    return "--inprivate";
+  }
+  // Chrome / Chromium
+  if (p.includes("chrome") || p.includes("chromium")) {
+    return "--incognito";
+  }
+  // Unknown binary — skip to avoid crash
+  return null;
+}
+
 export async function launchStealthBrowser(headed = false) {
   const extraArgs: string[] = [];
 
@@ -154,6 +169,11 @@ export async function launchStealthBrowser(headed = false) {
   } else {
     extraArgs.push("--disable-gpu");
   }
+
+  // Always launch in private / incognito mode so each run starts with a
+  // completely clean profile (no saved cookies, history, or login state).
+  const privateModeArg = getPrivateModeArg();
+  if (privateModeArg) extraArgs.push(privateModeArg);
 
   return chromium.launch({
     headless: !headed,
