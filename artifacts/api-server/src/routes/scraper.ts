@@ -6,6 +6,11 @@ import { humanClick, humanRightClick, humanDoubleClick, humanType } from "../lib
 
 const router = Router();
 
+// ─── Session stop registry (cross-platform reliable stop) ─────────────────────
+// Maps sessionId → abort function. Used by the explicit /stop endpoints so that
+// clicking Stop always works even when res.on("close") doesn't fire (e.g. Windows).
+const stopRegistry = new Map<string, () => void>();
+
 // ─── Schemas ──────────────────────────────────────────────────────────────────
 
 const CustomSelectorSchema = z.object({
@@ -583,9 +588,10 @@ router.post("/scrape/stream", async (req, res) => {
   res.setHeader("X-Accel-Buffering", "no");
 
   // Abort only when the client disconnects *before* the response finishes normally.
-  // Using req.on("close") fires too early (right after the request body is parsed).
   // "finish" fires when res.end() completes; "close" fires when the socket is destroyed.
   // If "close" arrives before "finish", the client disconnected prematurely → abort.
+  // We ALSO register a stopRegistry entry so the frontend can call /scrape/stop/:id
+  // explicitly — this is more reliable on Windows where res.on("close") may not fire.
   const ac = new AbortController();
   let resDone = false;
   res.on("finish", () => { resDone = true; });
@@ -603,6 +609,11 @@ router.post("/scrape/stream", async (req, res) => {
     }
   }, 8000);
 
+  // Register stop-registry entry so the frontend can call /api/scrape/stop/:id
+  const sessionId = randomUUID();
+  stopRegistry.set(sessionId, () => ac.abort());
+  write({ t: "session_id", sessionId });
+
   // Register watch session slot so the SSE stream can start connecting immediately
   const watchId = randomUUID();
   watchSessions.set(watchId, { page: null });
@@ -618,6 +629,7 @@ router.post("/scrape/stream", async (req, res) => {
   } finally {
     clearInterval(keepalive);
     watchSessions.delete(watchId);
+    stopRegistry.delete(sessionId);
   }
   res.end();
 });
@@ -651,6 +663,8 @@ router.post("/parallel/stream", async (req, res) => {
   res.flushHeaders();
 
   // Abort all track sessions when the client disconnects prematurely.
+  // res.on("close") is the passive mechanism; /parallel/stop/:id is the active one
+  // (more reliable on Windows where the close event may not fire on fetch abort).
   const ac = new AbortController();
   let resDone = false;
   res.on("finish", () => { resDone = true; });
@@ -663,6 +677,11 @@ router.post("/parallel/stream", async (req, res) => {
   const keepalive = setInterval(() => {
     try { res.write(": ping\n"); } catch { /* closed */ }
   }, 8000);
+
+  // Register stop-registry entry so the frontend can call /api/parallel/stop/:id
+  const sessionId = randomUUID();
+  stopRegistry.set(sessionId, () => ac.abort());
+  write({ t: "session_id", sessionId });
 
   // Pre-register a watch slot per track so the screenshot SSE can start immediately
   const watchIds = parsed.data.tracks.map(() => {
@@ -701,8 +720,25 @@ router.post("/parallel/stream", async (req, res) => {
   );
 
   clearInterval(keepalive);
+  stopRegistry.delete(sessionId);
   write({ t: "all_done" });
   res.end();
+});
+
+// ─── POST /scrape/stop/:id  (explicit stop — works on Windows) ────────────────
+
+router.post("/scrape/stop/:id", (req, res) => {
+  const fn = stopRegistry.get(req.params.id);
+  if (fn) { fn(); stopRegistry.delete(req.params.id); }
+  res.json({ ok: true });
+});
+
+// ─── POST /parallel/stop/:id  (explicit stop — works on Windows) ─────────────
+
+router.post("/parallel/stop/:id", (req, res) => {
+  const fn = stopRegistry.get(req.params.id);
+  if (fn) { fn(); stopRegistry.delete(req.params.id); }
+  res.json({ ok: true });
 });
 
 // ─── GET /scrape/history ──────────────────────────────────────────────────────

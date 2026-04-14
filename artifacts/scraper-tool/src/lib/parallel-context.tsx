@@ -27,6 +27,7 @@ interface ParallelContextValue {
 
   // Stable refs (survive navigation, safe to capture in async closures)
   abortRef: React.MutableRefObject<AbortController | null>;
+  parallelSessionIdRef: React.MutableRefObject<string | null>;
   watchEsRefs: React.MutableRefObject<Map<number, EventSource>>;
   closeWatchTimerRef: React.MutableRefObject<ReturnType<typeof setTimeout> | null>;
   stopLoopRef: React.MutableRefObject<boolean>;
@@ -44,6 +45,7 @@ export function ParallelProvider({ children }: { children: ReactNode }) {
   const [trackStates, setTrackStates] = useState<TrackState[]>([]);
 
   const abortRef = useRef<AbortController | null>(null);
+  const parallelSessionIdRef = useRef<string | null>(null);
   const watchEsRefs = useRef<Map<number, EventSource>>(new Map());
   const closeWatchTimerRef = useRef<ReturnType<typeof setTimeout> | null>(null);
   const stopLoopRef = useRef(false);
@@ -57,7 +59,7 @@ export function ParallelProvider({ children }: { children: ReactNode }) {
     <ParallelContext.Provider value={{
       running, loopRunning, loopProgress, trackStates,
       setRunning, setLoopRunning, setLoopProgress, setTrackStates,
-      abortRef, watchEsRefs, closeWatchTimerRef, stopLoopRef,
+      abortRef, parallelSessionIdRef, watchEsRefs, closeWatchTimerRef, stopLoopRef,
       closeAllWatch,
     }}>
       {children}

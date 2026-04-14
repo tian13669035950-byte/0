@@ -200,6 +200,7 @@ export default function Home() {
   const [addMenuOpen, setAddMenuOpen] = useState(false);
   const stopLoopRef = useRef(false);
   const abortRef = useRef<AbortController | null>(null);
+  const singleSessionIdRef = useRef<string | null>(null);
   const snapshotIdRef = useRef(0);
   const [execProgress, setExecProgress] = useState<{
     activeIdx: number | null;
@@ -599,6 +600,8 @@ export default function Home() {
     if (ev.t === "step_start") setExecProgress(p => p && ({ ...p, activeIdx: ev.i as number }));
     if (ev.t === "step_done") setExecProgress(p => p && ({ ...p, activeIdx: null, doneMap: { ...p.doneMap, [ev.i as number]: ev.ok as boolean } }));
     if (ev.t === "captured") setExecProgress(p => p && ({ ...p, liveVars: { ...p.liveVars, [ev.varName as string]: ev.value as string } }));
+    // Store session ID so cancelSingle() can use the explicit stop endpoint (Windows-compatible)
+    if (ev.t === "session_id" && ev.sessionId) { singleSessionIdRef.current = ev.sessionId as string; }
     if (ev.t === "watch_ready" && ev.watchId) {
       const wid = ev.watchId as string;
       setWatchId(wid);
@@ -607,6 +610,9 @@ export default function Home() {
   }, [openWatch]);
 
   const cancelSingle = useCallback(() => {
+    // Call the explicit stop endpoint first — reliable on all platforms including Windows.
+    const sid = singleSessionIdRef.current;
+    if (sid) { fetch(`/api/scrape/stop/${sid}`, { method: "POST" }).catch(() => {}); singleSessionIdRef.current = null; }
     abortRef.current?.abort();
   }, []);
 
@@ -628,6 +634,7 @@ export default function Home() {
       }
     } finally {
       abortRef.current = null;
+      singleSessionIdRef.current = null;
       setSinglePending(false);
       setTimeout(() => { setExecProgress(null); setWatchId(null); closeWatch(); }, 4000);
     }

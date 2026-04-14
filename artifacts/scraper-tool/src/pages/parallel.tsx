@@ -56,7 +56,7 @@ export default function Parallel() {
   const {
     running, loopRunning, loopProgress, trackStates,
     setRunning, setLoopRunning, setLoopProgress, setTrackStates,
-    abortRef, watchEsRefs, closeWatchTimerRef, stopLoopRef,
+    abortRef, parallelSessionIdRef, watchEsRefs, closeWatchTimerRef, stopLoopRef,
     closeAllWatch,
   } = useParallel();
 
@@ -162,6 +162,8 @@ export default function Parallel() {
           try {
             const ev = JSON.parse(line) as { track?: number; t: string; [k: string]: unknown };
             if (ev.t === "all_done") continue;
+            // Store session ID so cancel() can call the explicit stop endpoint (works on Windows)
+            if (ev.t === "session_id" && ev.sessionId) { parallelSessionIdRef.current = ev.sessionId as string; continue; }
             const idx = ev.track;
             if (idx === undefined) continue;
             if (ev.t === "watch_ready" && ev.watchId) openWatch(idx, ev.watchId as string);
@@ -179,6 +181,8 @@ export default function Parallel() {
                 // Race mode: first track to finish wins — abort all others immediately
                 if (raceMode && !raceWon) {
                   raceWon = true;
+                  const sid = parallelSessionIdRef.current;
+                  if (sid) { fetch(`/api/parallel/stop/${sid}`, { method: "POST" }).catch(() => {}); parallelSessionIdRef.current = null; }
                   abortRef.current?.abort();
                 }
               }
@@ -199,11 +203,12 @@ export default function Parallel() {
     } finally {
       setRunning(false);
       abortRef.current = null;
+      parallelSessionIdRef.current = null;
       if (closeWatchTimerRef.current) clearTimeout(closeWatchTimerRef.current);
       closeWatchTimerRef.current = setTimeout(() => closeAllWatch(), 3000);
     }
     return succeeded;
-  }, [tracks, sequences, proxyUrl, headedMode, raceMode, toast, openWatch, closeAllWatch, abortRef, setRunning, setTrackStates, closeWatchTimerRef]);
+  }, [tracks, sequences, proxyUrl, headedMode, raceMode, toast, openWatch, closeAllWatch, abortRef, parallelSessionIdRef, setRunning, setTrackStates, closeWatchTimerRef]);
 
   // ── Single run ───────────────────────────────────────────────────────────────
   const runParallel = useCallback(async () => {
@@ -246,6 +251,10 @@ export default function Parallel() {
 
   const cancel = () => {
     stopLoopRef.current = true;
+    // Explicitly call the stop endpoint — works even on Windows where the connection
+    // close event may not fire reliably when fetch is aborted.
+    const sid = parallelSessionIdRef.current;
+    if (sid) { fetch(`/api/parallel/stop/${sid}`, { method: "POST" }).catch(() => {}); parallelSessionIdRef.current = null; }
     abortRef.current?.abort();
     if (closeWatchTimerRef.current) clearTimeout(closeWatchTimerRef.current);
     closeAllWatch();
