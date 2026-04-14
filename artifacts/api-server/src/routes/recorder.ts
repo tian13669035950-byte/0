@@ -1,7 +1,7 @@
 import { Router } from "express";
 import { randomUUID } from "crypto";
 import { launchStealthBrowser, newStealthContext } from "../lib/stealth-browser";
-import { humanClick, humanRightClick, humanDoubleClick, humanType } from "../lib/human-actions";
+import { humanClick, humanRightClick, humanDoubleClick, humanType, humanPaste } from "../lib/human-actions";
 
 const router = Router();
 
@@ -28,6 +28,12 @@ export interface RecordedStep {
   keyDelays?: number[];
   /** Mouse-path waypoints (viewport pixel coords, 1280×800) recorded from the user's real cursor movement */
   mousePath?: { x: number; y: number }[];
+  /** When true, simulate Ctrl+V paste instead of character-by-character typing */
+  pasteMode?: boolean;
+  /** gotoif: 1-indexed step to jump to */
+  targetStep?: number;
+  /** gotoif: max retries */
+  maxRetries?: number;
 }
 
 interface RecorderSession {
@@ -393,11 +399,21 @@ router.post("/record/session/:id/step", async (req, res) => {
 
       case "type":
         await page.waitForSelector(step.selector!, { timeout: 8000 });
-        await humanType(page, step.selector!, rv(step.text ?? ""), {
-          keyDelays: step.keyDelays,
-          mousePath: step.mousePath,
-        });
+        if (step.pasteMode) {
+          await humanPaste(page, step.selector!, rv(step.text ?? ""), {
+            mousePath: step.mousePath,
+          });
+        } else {
+          await humanType(page, step.selector!, rv(step.text ?? ""), {
+            keyDelays: step.keyDelays,
+            mousePath: step.mousePath,
+          });
+        }
         await page.waitForTimeout(step.waitMs ?? 300);
+        break;
+
+      case "gotoif":
+        // gotoif is a replay-time conditional; no action during single-step execution
         break;
 
       case "key":

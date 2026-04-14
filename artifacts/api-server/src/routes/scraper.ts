@@ -2,7 +2,7 @@ import { Router } from "express";
 import { randomUUID } from "crypto";
 import { z } from "zod";
 import { launchStealthBrowser, newStealthContext } from "../lib/stealth-browser";
-import { humanClick, humanRightClick, humanDoubleClick, humanType } from "../lib/human-actions";
+import { humanClick, humanRightClick, humanDoubleClick, humanType, humanPaste } from "../lib/human-actions";
 
 const router = Router();
 
@@ -21,7 +21,7 @@ const CustomSelectorSchema = z.object({
 const MouseWaypointSchema = z.object({ x: z.number(), y: z.number() });
 
 const ScrapeStepSchema = z.object({
-  type: z.enum(["click", "listen", "type", "key", "select", "scroll", "hover", "navigate", "capture", "goback", "goforward", "reload", "wait", "screenshot", "rightclick", "doubleclick", "newtab", "switchtab", "closetab", "waitforvar"]),
+  type: z.enum(["click", "listen", "type", "key", "select", "scroll", "hover", "navigate", "capture", "goback", "goforward", "reload", "wait", "screenshot", "rightclick", "doubleclick", "newtab", "switchtab", "closetab", "waitforvar", "gotoif"]),
   selector: z.string().optional(),
   waitMs: z.number().nullish(),
   waitForPopupClose: z.boolean().nullish(),
@@ -39,6 +39,12 @@ const ScrapeStepSchema = z.object({
   keyDelays: z.array(z.number()).nullish(),
   /** Mouse-path waypoints (pixel coords) recorded from the user's real cursor movement */
   mousePath: z.array(MouseWaypointSchema).nullish(),
+  /** When true, simulate Ctrl+V paste instead of character-by-character typing */
+  pasteMode: z.boolean().nullish(),
+  /** gotoif: 1-indexed step number to jump to if condition is met */
+  targetStep: z.number().nullish(),
+  /** gotoif: maximum number of retries before giving up and continuing forward */
+  maxRetries: z.number().nullish(),
 });
 
 const ScrapeOptionsSchema = z.object({
@@ -182,11 +188,36 @@ async function runScrapeSession(
           ]
         : [];
 
-    for (let i = 0; i < effectiveSteps.length; i++) {
+    // retry counters per step index (used by gotoif)
+    const retryCounters: Record<number, number> = {};
+    let i = 0;
+    while (i < effectiveSteps.length) {
       checkAbort();
       const step = effectiveSteps[i];
       emit({ t: "step_start", i, stepType: step.type });
       let ok = true;
+
+      // ── gotoif: conditional jump-back for error-retry loops ──────────────────
+      if (step.type === "gotoif") {
+        const sel = step.selector?.trim();
+        if (sel) {
+          const isVisible = await page.isVisible(sel).catch(() => false);
+          const shouldJump = step.listenFor === "disappear" ? !isVisible : isVisible;
+          const maxR = step.maxRetries ?? 3;
+          const used = retryCounters[i] ?? 0;
+          if (shouldJump && used < maxR) {
+            retryCounters[i] = used + 1;
+            const target = Math.max(0, (step.targetStep ?? 1) - 1);
+            emit({ t: "step_done", i, ok: true });
+            emit({ t: "retry" as const, from: i + 1, to: target + 1, attempt: used + 1, max: maxR });
+            i = target;
+            continue;
+          }
+        }
+        emit({ t: "step_done", i, ok: true });
+        i++;
+        continue;
+      }
 
       if (step.type === "listen") {
         const timeout = step.listenTimeout ?? 15000;
@@ -301,10 +332,16 @@ async function runScrapeSession(
         const selector = step.selector.trim();
         try {
           await page.waitForSelector(selector, { timeout: 8000 });
-          await humanType(page, selector, resolveVars(step.text), {
-            keyDelays: step.keyDelays ?? undefined,
-            mousePath: step.mousePath ?? undefined,
-          });
+          if (step.pasteMode) {
+            await humanPaste(page, selector, resolveVars(step.text), {
+              mousePath: step.mousePath ?? undefined,
+            });
+          } else {
+            await humanType(page, selector, resolveVars(step.text), {
+              keyDelays: step.keyDelays ?? undefined,
+              mousePath: step.mousePath ?? undefined,
+            });
+          }
           if (step.waitMs) await page.waitForTimeout(step.waitMs);
         } catch { ok = false; }
 
@@ -423,6 +460,7 @@ async function runScrapeSession(
       }
 
       emit({ t: "step_done", i, ok });
+      i++;
     }
 
     const title = await page.title();

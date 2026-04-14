@@ -21,6 +21,7 @@ import {
   Keyboard, ListOrdered, Eye, MoveDown, Type, Activity,
   Video, StopCircle, Undo2, Link2, Download, Upload,
   RefreshCw, Camera, ChevronRight, MousePointer2, ArrowLeftRight, Shield,
+  Clipboard, RotateCcw,
 } from "lucide-react";
 import type { ScrapeResult } from "@workspace/api-client-react/src/generated/api.schemas";
 import { addItemToStore, fromScrapeResult } from "@/lib/result-store";
@@ -46,6 +47,12 @@ type RecordedStep = {
   keyDelays?: number[];
   /** Pixel-coord mouse path captured from the overlay before the user clicked */
   mousePath?: { x: number; y: number }[];
+  /** When true, simulate Ctrl+V paste instead of character-by-character typing */
+  pasteMode?: boolean;
+  /** gotoif: 1-indexed step to jump to on condition */
+  targetStep?: number;
+  /** gotoif: max retries before giving up */
+  maxRetries?: number;
 };
 
 // ─── Step definitions ────────────────────────────────────────────────────────
@@ -71,6 +78,7 @@ const STEP_TYPES = [
   { type: "switchtab",  label: "切换标签页", icon: ArrowLeftRight,   color: "sky",     desc: "切换到指定编号的标签页（从 0 开始）" },
   { type: "closetab",   label: "关闭标签页", icon: X,               color: "rose",    desc: "关闭当前标签页，自动切换回上一个标签" },
   { type: "waitforvar", label: "等待跨轨变量", icon: Clock,          color: "amber",   desc: "在并行执行中等待另一个轨道捕获某个变量后再继续" },
+  { type: "gotoif",    label: "错误则重试",   icon: RotateCcw,      color: "rose",    desc: "检查错误提示：如果出现（或消失），跳回指定步骤重新执行" },
 ] as const;
 
 type StepType = typeof STEP_TYPES[number]["type"];
@@ -97,7 +105,7 @@ const COMMON_KEYS = ["Enter", "Tab", "Escape", "Space", "ArrowDown", "ArrowUp", 
 // ─── Zod schemas ─────────────────────────────────────────────────────────────
 
 const stepSchema = z.object({
-  type: z.enum(["click", "listen", "type", "key", "select", "scroll", "hover", "navigate", "capture", "goback", "goforward", "reload", "wait", "screenshot", "rightclick", "doubleclick", "newtab", "switchtab", "closetab", "waitforvar"]),
+  type: z.enum(["click", "listen", "type", "key", "select", "scroll", "hover", "navigate", "capture", "goback", "goforward", "reload", "wait", "screenshot", "rightclick", "doubleclick", "newtab", "switchtab", "closetab", "waitforvar", "gotoif"]),
   selector: z.string().optional(),
   waitMs: z.number().optional(),
   waitForPopupClose: z.boolean().optional(),
@@ -115,6 +123,12 @@ const stepSchema = z.object({
   keyDelays: z.array(z.number()).optional(),
   /** Mouse-path waypoints (viewport px coords) recorded from real cursor movement */
   mousePath: z.array(z.object({ x: z.number(), y: z.number() })).optional(),
+  /** Simulate paste (Ctrl+V) instead of character-by-character typing */
+  pasteMode: z.boolean().optional(),
+  /** gotoif: 1-indexed step number to jump to */
+  targetStep: z.number().optional(),
+  /** gotoif: max retry count before giving up */
+  maxRetries: z.number().optional(),
 });
 
 type Step = z.infer<typeof stepSchema>;
@@ -185,6 +199,7 @@ const defaults: Record<StepType, Partial<Step>> = {
   switchtab:   { type: "switchtab",   tabIndex: 0, waitMs: 500 },
   closetab:    { type: "closetab",    waitMs: 500 },
   waitforvar:  { type: "waitforvar",  varName: "", listenTimeout: 60000 },
+  gotoif:      { type: "gotoif",      selector: "", listenFor: "appear", targetStep: 1, maxRetries: 3 },
   type:        { type: "type",        selector: "", text: "" },
   key:         { type: "key",         key: "Enter", waitMs: 500 },
   select:      { type: "select",      selector: "", value: "" },
@@ -925,6 +940,36 @@ export default function Home() {
                             </p>
                           </>}
 
+                          {s?.type === "gotoif" && <>
+                            <Field label="检查错误提示的选择器">
+                              <Input placeholder="例：.error-msg 或 #login-error" className="font-mono text-xs h-7"
+                                {...form.register(`steps.${index}.selector`)} />
+                            </Field>
+                            <Field label="触发条件">
+                              <select className="w-full border rounded px-2 py-1 text-xs bg-background"
+                                {...form.register(`steps.${index}.listenFor`)}>
+                                <option value="appear">元素出现时跳回（适合出现错误提示）</option>
+                                <option value="disappear">元素消失时跳回（适合加载遮罩消失）</option>
+                              </select>
+                            </Field>
+                            <Field label="跳回到第几步（从 1 起）">
+                              <div className="flex items-center gap-2">
+                                <Input type="number" min={1} className="font-mono text-xs h-7 w-20"
+                                  {...form.register(`steps.${index}.targetStep`, { valueAsNumber: true })} />
+                                <span className="text-xs text-muted-foreground">
+                                  共 {watchedSteps.length} 步 · 当前是第 {index + 1} 步
+                                </span>
+                              </div>
+                            </Field>
+                            <Field label="最多重试几次（超过后继续往下）">
+                              <Input type="number" min={1} max={20} className="font-mono text-xs h-7 w-20"
+                                {...form.register(`steps.${index}.maxRetries`, { valueAsNumber: true })} />
+                            </Field>
+                            <p className="text-xs text-muted-foreground bg-rose-50 border border-rose-200 rounded px-2 py-1.5">
+                              <strong>用法示例：</strong>步骤 1 填邮箱 → 步骤 2 填密码 → 步骤 3 点提交 → 步骤 4（本步骤）：选择器填 <code className="font-mono">.error-msg</code>，跳回第 1 步，最多重试 3 次。出现错误就自动从步骤 1 重新填写。
+                            </p>
+                          </>}
+
                           {s?.type === "type" && <>
                             <Field label="目标输入框选择器">
                               <Input placeholder="例：#username 或 input[name=email]" className="font-mono text-xs h-7"
@@ -965,8 +1010,25 @@ export default function Home() {
                                 }}
                               />
                             </Field>
-                            <p className="text-xs text-muted-foreground bg-green-50 border border-green-200 rounded px-2 py-1.5">
-                              在框内按你的真实节奏打字，时序自动录制；用 <code className="font-mono">{"${变量名}"}</code> 引用"读取保存"步骤里存的值
+                            <div className="flex items-center justify-between rounded border border-green-200 bg-green-50 px-2.5 py-1.5">
+                              <span className="text-xs text-green-800 font-medium">输入方式</span>
+                              <div className="flex gap-1">
+                                <button type="button"
+                                  className={`px-2 py-0.5 text-[11px] rounded border transition-colors ${!watchedSteps[index]?.pasteMode ? "bg-green-600 text-white border-green-600" : "bg-white text-green-700 border-green-300 hover:bg-green-50"}`}
+                                  onClick={() => form.setValue(`steps.${index}.pasteMode`, false)}>
+                                  ⌨ 逐字输入
+                                </button>
+                                <button type="button"
+                                  className={`px-2 py-0.5 text-[11px] rounded border transition-colors flex items-center gap-0.5 ${watchedSteps[index]?.pasteMode ? "bg-green-600 text-white border-green-600" : "bg-white text-green-700 border-green-300 hover:bg-green-50"}`}
+                                  onClick={() => form.setValue(`steps.${index}.pasteMode`, true)}>
+                                  <Clipboard className="h-3 w-3" /> 模拟粘贴
+                                </button>
+                              </div>
+                            </div>
+                            <p className="text-xs text-muted-foreground">
+                              {watchedSteps[index]?.pasteMode
+                                ? "模拟 Ctrl+V 粘贴（不逐字输入），适合邮箱、链接等常用粘贴的内容"
+                                : <>逐字输入并录制打字节奏；用 <code className="font-mono">{"${变量名}"}</code> 引用「读取保存」步骤存的值</>}
                             </p>
                           </>}
 
@@ -1601,6 +1663,7 @@ export default function Home() {
       const needsTabIndex = recFormType === "switchtab";
       const needsListen   = pickPhase2 && recFormType === "listen";
       const needsVarName  = pickPhase2 && recFormType === "capture";
+      const needsGotoif   = recFormType === "gotoif";
       const noParams      = ["goback","goforward","reload","wait","screenshot","closetab"].includes(recFormType ?? "");
 
       const COMMON_KEYS_LIST = ["Enter","Tab","Escape","Space","ArrowDown","ArrowUp","ArrowLeft","ArrowRight","Backspace","Delete"];
@@ -1608,6 +1671,18 @@ export default function Home() {
       const buildPayload = (): Omit<RecordedStep,"id"> | null => {
         if (!recFormType) return null;
         const base: Omit<RecordedStep,"id"> = { type: recFormType };
+
+        // gotoif is config-only: no selector pick, just fill fields
+        if (needsGotoif) {
+          const sel = String(fv.selector ?? "").trim();
+          if (!sel) { toast({ title: "请填写要检查的错误提示选择器", variant: "destructive" }); return null; }
+          base.selector = sel;
+          base.listenFor = String(fv.listenFor ?? "appear");
+          base.targetStep = Number(fv.targetStep ?? 1);
+          base.maxRetries = Number(fv.maxRetries ?? 3);
+          return base;
+        }
+
         // Use auto-detected selector (pick-then-fill mode) or fall back to form field
         if (isPickThenFillMode) {
           const sel = recPickedSelector ?? String(fv.selector ?? "").trim();
@@ -1625,7 +1700,9 @@ export default function Home() {
         }
         if (needsText) {
           base.text = String(fv.text ?? "");
-          if (recTextDelays.length > 0) {
+          if (fv.pasteMode) {
+            base.pasteMode = true;
+          } else if (recTextDelays.length > 0) {
             base.keyDelays = [...recTextDelays];
           }
         }
@@ -1973,7 +2050,24 @@ export default function Home() {
                             setFv("text", e.target.value);
                           }}
                         />
-                        <p className="text-[9px] text-zinc-500 mt-0.5">在此输入 → 自动录制你的打字节奏，回放时原样模仿</p>
+                        <div className="flex items-center justify-between mt-1.5 rounded border border-zinc-700 bg-zinc-800/60 px-2 py-1">
+                          <span className="text-[10px] text-zinc-400">输入方式</span>
+                          <div className="flex gap-1">
+                            <button type="button"
+                              className={`px-1.5 py-0.5 text-[10px] rounded border transition-colors ${!fv.pasteMode ? "bg-emerald-700 text-white border-emerald-600" : "bg-zinc-700 text-zinc-300 border-zinc-600 hover:bg-zinc-600"}`}
+                              onClick={() => setFv("pasteMode", false)}>
+                              ⌨ 逐字
+                            </button>
+                            <button type="button"
+                              className={`px-1.5 py-0.5 text-[10px] rounded border transition-colors flex items-center gap-0.5 ${fv.pasteMode ? "bg-emerald-700 text-white border-emerald-600" : "bg-zinc-700 text-zinc-300 border-zinc-600 hover:bg-zinc-600"}`}
+                              onClick={() => setFv("pasteMode", true)}>
+                              <Clipboard className="h-2.5 w-2.5" /> 粘贴
+                            </button>
+                          </div>
+                        </div>
+                        <p className="text-[9px] text-zinc-500 mt-0.5">
+                          {fv.pasteMode ? "将模拟 Ctrl+V 粘贴，不录制打字节奏" : "在此输入 → 自动录制你的打字节奏，回放时原样模仿"}
+                        </p>
                       </div>
                     )}
                     {needsKey && (
@@ -2047,8 +2141,50 @@ export default function Home() {
                         />
                       </div>
                     )}
+                    {needsGotoif && (
+                      <div className="space-y-2">
+                        <div>
+                          <label className="text-[10px] text-zinc-400 block mb-0.5">错误提示选择器</label>
+                          <input type="text"
+                            value={String(fv.selector ?? "")}
+                            onChange={e => setFv("selector", e.target.value)}
+                            placeholder="例：.error-msg 或 #login-error"
+                            className="w-full px-2 py-1 text-xs rounded bg-zinc-800 text-zinc-100 border border-zinc-600 placeholder:text-zinc-500 focus:outline-none focus:border-rose-500 font-mono"
+                          />
+                        </div>
+                        <div>
+                          <label className="text-[10px] text-zinc-400 block mb-0.5">触发条件</label>
+                          <select
+                            value={String(fv.listenFor ?? "appear")}
+                            onChange={e => setFv("listenFor", e.target.value)}
+                            className="w-full px-2 py-1 text-xs rounded bg-zinc-800 text-zinc-100 border border-zinc-600 focus:outline-none">
+                            <option value="appear">元素出现时跳回</option>
+                            <option value="disappear">元素消失时跳回</option>
+                          </select>
+                        </div>
+                        <div className="flex gap-2">
+                          <div className="flex-1">
+                            <label className="text-[10px] text-zinc-400 block mb-0.5">跳回到第几步（从 1 起）</label>
+                            <input type="number" min={1}
+                              value={String(fv.targetStep ?? 1)}
+                              onChange={e => setFv("targetStep", Number(e.target.value))}
+                              className="w-full px-2 py-1 text-xs rounded bg-zinc-800 text-zinc-100 border border-zinc-600 focus:outline-none font-mono"
+                            />
+                          </div>
+                          <div className="w-24">
+                            <label className="text-[10px] text-zinc-400 block mb-0.5">最多重试</label>
+                            <input type="number" min={1} max={20}
+                              value={String(fv.maxRetries ?? 3)}
+                              onChange={e => setFv("maxRetries", Number(e.target.value))}
+                              className="w-full px-2 py-1 text-xs rounded bg-zinc-800 text-zinc-100 border border-zinc-600 focus:outline-none font-mono"
+                            />
+                          </div>
+                        </div>
+                        <p className="text-[9px] text-zinc-500">此步骤不执行浏览器操作，只在回放时检查条件并控制流程跳转</p>
+                      </div>
+                    )}
                     {/* waitMs — shown only when form is ready to submit */}
-                    {!isClickPickMode && !pickPhase1 && !["listen","capture"].includes(recFormType) && (
+                    {!isClickPickMode && !pickPhase1 && !["listen","capture","gotoif"].includes(recFormType ?? "") && (
                       <div className="flex items-center gap-2">
                         <label className="text-[10px] text-zinc-400 shrink-0">执行后等待</label>
                         <input

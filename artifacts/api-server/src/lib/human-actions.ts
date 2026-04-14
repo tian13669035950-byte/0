@@ -100,6 +100,38 @@ export async function humanDoubleClick(
 }
 
 /**
+ * Simulate a paste operation: click the field, write text to clipboard, then Ctrl+V.
+ * Falls back to execCommand insertText → fast-type if clipboard API is unavailable.
+ */
+export async function humanPaste(
+  page: Page, selector: string, text: string, opts?: HumanClickOpts,
+) {
+  await humanClick(page, selector, opts);
+  await page.keyboard.press("Control+a");
+  await page.waitForTimeout(40 + Math.random() * 60);
+
+  // Strategy 1: real clipboard paste (most realistic)
+  const ok = await page.evaluate(async (t: string) => {
+    try { await navigator.clipboard.writeText(t); return true; } catch { return false; }
+  }, text);
+
+  if (ok) {
+    await page.waitForTimeout(20 + Math.random() * 40);
+    await page.keyboard.press("Control+v");
+  } else {
+    // Strategy 2: execCommand insertText (works in most browsers, triggers React events)
+    const done = await page.evaluate((t: string) =>
+      document.execCommand("insertText", false, t), text);
+    if (!done) {
+      // Strategy 3: zero-delay type (no per-char timing ≈ paste)
+      await page.keyboard.press("Delete");
+      await page.keyboard.type(text, { delay: 0 });
+    }
+  }
+  await page.waitForTimeout(50 + Math.random() * 100);
+}
+
+/**
  * Click the field, clear it, then type text character by character.
  *
  * If keyDelays is provided (from a real recording), delays are played back
