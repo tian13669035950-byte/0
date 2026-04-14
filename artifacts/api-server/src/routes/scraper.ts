@@ -45,6 +45,10 @@ const ScrapeStepSchema = z.object({
   targetStep: z.number().nullish(),
   /** gotoif: maximum number of retries before giving up and continuing forward */
   maxRetries: z.number().nullish(),
+  /** scroll: horizontal pixel offset (positive = right) */
+  scrollX: z.number().nullish(),
+  /** scroll: vertical pixel offset (positive = down) */
+  scrollY: z.number().nullish(),
 });
 
 const ScrapeOptionsSchema = z.object({
@@ -365,7 +369,9 @@ async function runScrapeSession(
             await page.locator(step.selector.trim()).first().scrollIntoViewIfNeeded();
           } catch { ok = false; }
         } else {
-          await page.mouse.wheel(0, step.waitMs ?? 300);
+          const dx = step.scrollX ?? 0;
+          const dy = step.scrollY ?? step.waitMs ?? 300;
+          await page.evaluate(([x, y]: [number, number]) => window.scrollBy(x, y), [dx, dy]);
         }
         if (step.waitMs) await page.waitForTimeout(step.waitMs);
 

@@ -53,6 +53,10 @@ type RecordedStep = {
   targetStep?: number;
   /** gotoif: max retries before giving up */
   maxRetries?: number;
+  /** scroll: horizontal pixel offset (positive = right) */
+  scrollX?: number;
+  /** scroll: vertical pixel offset (positive = down) */
+  scrollY?: number;
 };
 
 // ─── Step definitions ────────────────────────────────────────────────────────
@@ -64,7 +68,7 @@ const STEP_TYPES = [
   { type: "type",        label: "输入文字", icon: Type,              color: "green",   desc: "在输入框填入文字，支持 ${变量名} 引用保存的值" },
   { type: "key",         label: "按键",     icon: Keyboard,          color: "orange",  desc: "模拟键盘按键，如回车、Tab" },
   { type: "select",      label: "下拉选择", icon: ListOrdered,       color: "cyan",    desc: "选择下拉框中的某个选项" },
-  { type: "scroll",      label: "滚动",     icon: MoveDown,          color: "pink",    desc: "滚动到指定元素位置" },
+  { type: "scroll",      label: "滚动",     icon: MoveDown,          color: "pink",    desc: "按像素距离滚动页面（X/Y 偏移）" },
   { type: "hover",       label: "悬停",     icon: Eye,               color: "yellow",  desc: "将鼠标悬停在元素上" },
   { type: "navigate",    label: "跳转网址", icon: Globe,             color: "indigo",  desc: "在同一浏览器内跳转到另一个网址" },
   { type: "goback",      label: "后退",     icon: Undo2,             color: "slate",   desc: "浏览器后退到上一个页面（等同于点后退按钮）" },
@@ -129,6 +133,10 @@ const stepSchema = z.object({
   targetStep: z.number().optional(),
   /** gotoif: max retry count before giving up */
   maxRetries: z.number().optional(),
+  /** Pixel distance for scroll step (X axis) */
+  scrollX: z.number().optional(),
+  /** Pixel distance for scroll step (Y axis, positive = down) */
+  scrollY: z.number().optional(),
 });
 
 type Step = z.infer<typeof stepSchema>;
@@ -534,7 +542,7 @@ export default function Home() {
   type ClickPickType = typeof CLICK_PICK_TYPES[number];
 
   // Step types that first detect the selector by clicking, then show a mini-form for remaining fields
-  const PICK_THEN_FILL_TYPES = ["type", "select", "scroll", "capture", "listen"] as const;
+  const PICK_THEN_FILL_TYPES = ["type", "select", "capture", "listen"] as const;
 
   // ── Click at coords (auto-detects CSS selector) ──────────────────────────
   const sendClickAtCoords = useCallback(async (action: ClickPickType, x: number, y: number) => {
@@ -1136,10 +1144,16 @@ export default function Home() {
                           </>}
 
                           {s?.type === "scroll" && <>
-                            <Field label="滚动到此元素（留空则向下滚动）">
-                              <Input placeholder="例：#footer 或 .load-more" className="font-mono text-xs h-7"
-                                {...form.register(`steps.${index}.selector`)} />
-                            </Field>
+                            <div className="grid grid-cols-2 gap-2">
+                              <Field label="水平距离 X（像素）">
+                                <Input type="number" placeholder="0" className="font-mono text-xs h-7"
+                                  {...form.register(`steps.${index}.scrollX`, { valueAsNumber: true })} />
+                              </Field>
+                              <Field label="垂直距离 Y（↓正数 ↑负数）">
+                                <Input type="number" placeholder="500" className="font-mono text-xs h-7"
+                                  {...form.register(`steps.${index}.scrollY`, { valueAsNumber: true })} />
+                              </Field>
+                            </div>
                           </>}
 
                           {s?.type === "hover" && <>
@@ -1717,7 +1731,7 @@ export default function Home() {
       // Mode 1: execute + record immediately on page click (click/dblclick/rightclick/hover)
       const isClickPickMode = recFormType !== null && (["click","doubleclick","rightclick","hover"] as string[]).includes(recFormType);
       // Mode 2: click page to detect selector, then fill remaining fields in mini-form
-      const isPickThenFillMode = recFormType !== null && (["type","select","scroll","capture","listen"] as string[]).includes(recFormType);
+      const isPickThenFillMode = recFormType !== null && (["type","select","capture","listen"] as string[]).includes(recFormType);
       // In mode 2, phase 1 = waiting for page click; phase 2 = selector detected, show form
       const pickPhase1 = isPickThenFillMode && recPickedSelector === null;
       const pickPhase2 = isPickThenFillMode && recPickedSelector !== null;
@@ -1734,6 +1748,7 @@ export default function Home() {
       const needsListen   = pickPhase2 && recFormType === "listen";
       const needsVarName  = pickPhase2 && recFormType === "capture";
       const needsGotoif   = recFormType === "gotoif";
+      const needsScroll   = recFormType === "scroll";
       const noParams      = ["goback","goforward","reload","wait","screenshot","closetab"].includes(recFormType ?? "");
 
       const COMMON_KEYS_LIST = ["Enter","Tab","Escape","Space","ArrowDown","ArrowUp","ArrowLeft","ArrowRight","Backspace","Delete"];
@@ -1753,14 +1768,22 @@ export default function Home() {
           return base;
         }
 
+        // Scroll: pure numeric X/Y offsets, no element picking needed
+        if (needsScroll) {
+          base.scrollX = Number(fv.scrollX ?? 0);
+          base.scrollY = Number(fv.scrollY ?? 500);
+          if (fv.waitMs) base.waitMs = Number(fv.waitMs);
+          return base;
+        }
+
         // Use auto-detected selector (pick-then-fill mode) or fall back to form field
         if (isPickThenFillMode) {
           const sel = recPickedSelector ?? String(fv.selector ?? "").trim();
-          if (!sel && recFormType !== "scroll") { toast({ title: "请先点击页面元素识别选择器", variant: "destructive" }); return null; }
+          if (!sel) { toast({ title: "请先点击页面元素识别选择器", variant: "destructive" }); return null; }
           if (sel) base.selector = sel;
         } else if (needsSelector && !noParams) {
           const sel = String(fv.selector ?? "").trim();
-          if (!sel && !["scroll"].includes(recFormType)) { toast({ title: "请填写选择器", variant: "destructive" }); return null; }
+          if (!sel) { toast({ title: "请填写选择器", variant: "destructive" }); return null; }
           if (sel) base.selector = sel;
         }
         if (needsUrl) {
@@ -2304,6 +2327,34 @@ export default function Home() {
                         <p className="text-[9px] text-zinc-500">此步骤不执行浏览器操作，只在回放时检查条件并控制流程跳转</p>
                       </div>
                     )}
+                    {needsScroll && (
+                      <div className="space-y-2">
+                        <p className="text-[10px] text-zinc-400">滚动距离（像素）。正数向右/向下，负数向左/向上。</p>
+                        <div className="flex gap-2">
+                          <div className="flex-1">
+                            <label className="text-[10px] text-zinc-400 block mb-0.5">水平距离 X</label>
+                            <input
+                              type="number"
+                              value={String(fv.scrollX ?? 0)}
+                              onChange={e => setFv("scrollX", Number(e.target.value))}
+                              placeholder="0"
+                              className="w-full px-2 py-1 text-xs rounded bg-zinc-800 text-zinc-100 border border-zinc-600 focus:outline-none focus:border-blue-500 font-mono"
+                            />
+                          </div>
+                          <div className="flex-1">
+                            <label className="text-[10px] text-zinc-400 block mb-0.5">垂直距离 Y（↓正 ↑负）</label>
+                            <input
+                              type="number"
+                              value={String(fv.scrollY ?? 500)}
+                              onChange={e => setFv("scrollY", Number(e.target.value))}
+                              placeholder="500"
+                              className="w-full px-2 py-1 text-xs rounded bg-zinc-800 text-zinc-100 border border-zinc-600 focus:outline-none focus:border-blue-500 font-mono"
+                            />
+                          </div>
+                        </div>
+                      </div>
+                    )}
+
                     {/* waitMs — shown only when form is ready to submit */}
                     {!isClickPickMode && !pickPhase1 && !["listen","capture","gotoif"].includes(recFormType ?? "") && (
                       <div className="flex items-center gap-2">
@@ -2439,7 +2490,9 @@ export default function Home() {
                           const def = STEP_TYPES.find(t => t.type === rs.type) ?? { label: rs.type, icon: Play, color: "slate" };
                           const colors = COLOR_MAP[def.color];
                           const Icon = def.icon;
-                          const summary = rs.selector ?? rs.url ?? rs.text ?? rs.key ?? rs.value ?? (rs.tabIndex !== undefined ? `标签 ${rs.tabIndex}` : "");
+                          const summary = rs.type === "scroll"
+                            ? `X ${rs.scrollX ?? 0}px  Y ${rs.scrollY ?? 500}px`
+                            : rs.selector ?? rs.url ?? rs.text ?? rs.key ?? rs.value ?? (rs.tabIndex !== undefined ? `标签 ${rs.tabIndex}` : "");
                           const isEditing = editingRecIdx === i;
                           return (
                             <div key={rs.id} className={`rounded-md border ${colors.bg} ${colors.border} animate-in slide-in-from-bottom-1 ${isEditing ? "ring-1 ring-primary/50" : ""}`}>
@@ -2479,8 +2532,25 @@ export default function Home() {
                               {/* Inline edit form */}
                               {isEditing && (
                                 <div className="border-t border-current/10 bg-background/80 px-2 pb-2 pt-1.5 space-y-1.5">
+                                  {/* Scroll X/Y */}
+                                  {rs.type === "scroll" && (
+                                    <div className="grid grid-cols-2 gap-1.5">
+                                      <div>
+                                        <label className="text-[9px] text-muted-foreground uppercase tracking-wide block mb-0.5">水平 X（像素）</label>
+                                        <input type="number" className="w-full px-1.5 py-0.5 text-[11px] font-mono rounded border bg-background focus:outline-none focus:ring-1 focus:ring-primary/40"
+                                          value={String(editingRecValues.scrollX ?? rs.scrollX ?? 0)}
+                                          onChange={e => setEv("scrollX", Number(e.target.value))} />
+                                      </div>
+                                      <div>
+                                        <label className="text-[9px] text-muted-foreground uppercase tracking-wide block mb-0.5">垂直 Y（像素）</label>
+                                        <input type="number" className="w-full px-1.5 py-0.5 text-[11px] font-mono rounded border bg-background focus:outline-none focus:ring-1 focus:ring-primary/40"
+                                          value={String(editingRecValues.scrollY ?? rs.scrollY ?? 500)}
+                                          onChange={e => setEv("scrollY", Number(e.target.value))} />
+                                      </div>
+                                    </div>
+                                  )}
                                   {/* Selector */}
-                                  {["click","doubleclick","rightclick","hover","scroll","type","select","capture","listen","gotoif"].includes(rs.type) && (
+                                  {["click","doubleclick","rightclick","hover","type","select","capture","listen","gotoif"].includes(rs.type) && (
                                     <div>
                                       <label className="text-[9px] text-muted-foreground uppercase tracking-wide block mb-0.5">选择器</label>
                                       <input className="w-full px-1.5 py-0.5 text-[11px] font-mono rounded border bg-background focus:outline-none focus:ring-1 focus:ring-primary/40"

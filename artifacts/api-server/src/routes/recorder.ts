@@ -34,6 +34,10 @@ export interface RecordedStep {
   targetStep?: number;
   /** gotoif: max retries */
   maxRetries?: number;
+  /** scroll: horizontal pixel offset (positive = right) */
+  scrollX?: number;
+  /** scroll: vertical pixel offset (positive = down) */
+  scrollY?: number;
 }
 
 interface RecorderSession {
@@ -431,9 +435,15 @@ router.post("/record/session/:id/step", async (req, res) => {
         if (step.selector?.trim()) {
           const el = await page.$(step.selector);
           if (el) await el.scrollIntoViewIfNeeded();
-          else await page.mouse.wheel(0, step.waitMs ?? 300);
+          else {
+            const dx = step.scrollX ?? 0;
+            const dy = step.scrollY ?? step.waitMs ?? 300;
+            await page.evaluate(([x, y]: [number, number]) => window.scrollBy(x, y), [dx, dy]);
+          }
         } else {
-          await page.mouse.wheel(0, step.waitMs ?? 300);
+          const dx = step.scrollX ?? 0;
+          const dy = step.scrollY ?? step.waitMs ?? 300;
+          await page.evaluate(([x, y]: [number, number]) => window.scrollBy(x, y), [dx, dy]);
         }
         break;
 

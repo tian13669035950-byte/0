@@ -181,9 +181,16 @@ export default function Parallel() {
                 // Race mode: first track to finish wins — abort all others immediately
                 if (raceMode && !raceWon) {
                   raceWon = true;
+                  const winIdx = idx;
                   const sid = parallelSessionIdRef.current;
                   if (sid) { fetch(`/api/parallel/stop/${sid}`, { method: "POST" }).catch(() => {}); parallelSessionIdRef.current = null; }
                   abortRef.current?.abort();
+                  // Close all watch EventSources immediately so losing tracks' live preview stops
+                  closeAllWatch();
+                  // Mark all non-winning tracks as done and wipe their screenshots
+                  setTrackStates(prev => prev.map((ts, i) =>
+                    i === winIdx ? ts : { ...ts, done: true, screenshot: undefined, liveUrl: undefined }
+                  ));
                 }
               }
               if (ev.t === "error") { ts.done = true; ts.error = ev.message as string; }
