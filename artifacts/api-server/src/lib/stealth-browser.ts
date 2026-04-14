@@ -198,6 +198,122 @@ const STEALTH_INIT_SCRIPT = `
       Object.defineProperty(window.screen, 'availHeight', { get: () => 1040 });
     }
   } catch (_) {}
+
+  // 15. Canvas toDataURL / toBlob — per-session ±1 pixel noise defeats canvas fingerprinting
+  //     Uses a copy so the original canvas is never mutated.
+  (function () {
+    const _s = Math.random();
+    function _n(i) {
+      const v = Math.sin(_s * 7919 + i) * 1e4;
+      const f = v - Math.floor(v);
+      return f < 0.33 ? -1 : f < 0.66 ? 0 : 1;
+    }
+    function _perturb(src) {
+      try {
+        if (!src.width || !src.height) return src;
+        const c  = document.createElement('canvas');
+        c.width  = src.width;
+        c.height = src.height;
+        const cx = c.getContext('2d');
+        if (!cx) return src;
+        cx.drawImage(src, 0, 0);
+        const id = cx.getImageData(0, 0, c.width, c.height);
+        const d  = id.data;
+        for (let i = 0; i < d.length; i += 4) {
+          d[i]   = Math.max(0, Math.min(255, d[i]   + _n(i)));
+          d[i+1] = Math.max(0, Math.min(255, d[i+1] + _n(i + 1)));
+          d[i+2] = Math.max(0, Math.min(255, d[i+2] + _n(i + 2)));
+        }
+        cx.putImageData(id, 0, 0);
+        return c;
+      } catch (_) { return src; }
+    }
+    const _tdu  = HTMLCanvasElement.prototype.toDataURL;
+    const _tblob = HTMLCanvasElement.prototype.toBlob;
+    HTMLCanvasElement.prototype.toDataURL = function (type, q) { return _tdu.call(_perturb(this), type, q); };
+    HTMLCanvasElement.prototype.toBlob    = function (cb, type, q) { _tblob.call(_perturb(this), cb, type, q); };
+  })();
+
+  // 16. AudioContext — stable sub-LSB noise in channel / frequency data defeats audio fingerprinting
+  (function () {
+    const _s = Math.random();
+    function _n(i) {
+      const v = Math.sin(_s * 6271 + i * 0.0001) * 1e6;
+      return ((v - Math.floor(v)) - 0.5) * 1e-7;
+    }
+    try {
+      const _orig = AudioBuffer.prototype.getChannelData;
+      AudioBuffer.prototype.getChannelData = function (ch) {
+        const buf = _orig.call(this, ch);
+        const off = ch * buf.length;
+        for (let i = 0; i < buf.length; i++) buf[i] += _n(off + i);
+        return buf;
+      };
+    } catch (_) {}
+    try {
+      const _orig = AnalyserNode.prototype.getFloatFrequencyData;
+      AnalyserNode.prototype.getFloatFrequencyData = function (arr) {
+        _orig.call(this, arr);
+        for (let i = 0; i < arr.length; i++) arr[i] += _n(i) * 1e3;
+      };
+    } catch (_) {}
+  })();
+
+  // 17. WebRTC — strip ICE servers so the real server IP is never leaked via STUN
+  (function () {
+    try {
+      const _orig = window.RTCPeerConnection;
+      if (!_orig) return;
+      const _p = function (cfg, con) {
+        return new _orig(cfg ? Object.assign({}, cfg, { iceServers: [] }) : { iceServers: [] }, con);
+      };
+      _p.prototype = _orig.prototype;
+      Object.defineProperty(window, 'RTCPeerConnection',
+        { value: _p, writable: true, configurable: true });
+      ['webkitRTCPeerConnection', 'mozRTCPeerConnection'].forEach(function (k) {
+        if ((window)[k]) Object.defineProperty(window, k, { value: _p, writable: true, configurable: true });
+      });
+    } catch (_) {}
+  })();
+
+  // 18. ClientRects sub-pixel noise — makes layout-based fingerprinting unreliable
+  (function () {
+    const _s = Math.random();
+    function _n(v, i) {
+      const x = Math.sin(_s * 5381 + i) * 1e4;
+      return v + ((x - Math.floor(x)) - 0.5) * 0.12;
+    }
+    try {
+      const _orig = Element.prototype.getBoundingClientRect;
+      Element.prototype.getBoundingClientRect = function () {
+        const r = _orig.call(this);
+        const b = (r.left + r.top) | 0;
+        return {
+          x: _n(r.x, b),      y: _n(r.y, b + 1),
+          top:    _n(r.top,    b + 2), left:   _n(r.left,   b + 3),
+          bottom: _n(r.bottom, b + 4), right:  _n(r.right,  b + 5),
+          width:  _n(r.width,  b + 6), height: _n(r.height, b + 7),
+          toJSON() { return { x: this.x, y: this.y, top: this.top, left: this.left, bottom: this.bottom, right: this.right, width: this.width, height: this.height }; },
+        };
+      };
+    } catch (_) {}
+  })();
+
+  // 19. Font list spoofing — clamp FontFace load feedback to prevent font-set fingerprinting
+  (function () {
+    try {
+      const _origCheck = document.fonts && document.fonts.check;
+      if (!_origCheck) return;
+      // Make unsupported "probe" fonts appear as if they loaded, blurring the supported set
+      const _common = new Set(['Arial','Helvetica','Times New Roman','Courier New','Georgia','Verdana','Tahoma']);
+      document.fonts.check = function (font, text) {
+        // Extract font family name from CSS font string  e.g. "12px 'Comic Sans MS'"
+        const m = font.match(/['"]([^'"]+)['"]/);
+        if (m && !_common.has(m[1])) return true;   // unknown probe font → pretend it exists
+        return _origCheck.call(this, font, text);
+      };
+    } catch (_) {}
+  })();
 })();
 `;
 
@@ -279,6 +395,8 @@ export async function newStealthContext(
     hasTouch: false,
     isMobile: false,
     javaScriptEnabled: true,
+    // Timezone matches zh-CN language + Win32 UA; prevents timezone-based fingerprinting
+    timezoneId: "Asia/Shanghai",
     ...extra,
   });
 
