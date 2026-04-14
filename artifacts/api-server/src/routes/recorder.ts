@@ -24,6 +24,10 @@ export interface RecordedStep {
   incognito?: boolean;
   label?: string;
   navigatedTo?: string;
+  /** Inter-keystroke delays (ms) captured from the user's real typing rhythm */
+  keyDelays?: number[];
+  /** Mouse-path waypoints (viewport pixel coords, 1280×800) recorded from the user's real cursor movement */
+  mousePath?: { x: number; y: number }[];
 }
 
 interface RecorderSession {
@@ -295,11 +299,20 @@ router.post("/record/session/:id/click", async (req, res) => {
   if (!session) return res.status(404).json({ error: "Session not found" });
   session.lastActivity = Date.now();
 
-  const { action = "click", x, y } = req.body as {
+  const { action = "click", x, y, mousePath: rawPath } = req.body as {
     action?: "click" | "doubleclick" | "rightclick" | "hover";
     x: number; // normalized 0-1
     y: number;
+    /** Normalized (0-1) waypoints captured from the overlay's mousemove events */
+    mousePath?: { x: number; y: number }[];
   };
+  // Scale normalised waypoints → actual viewport pixel coords
+  const scaledPath = rawPath && rawPath.length >= 3
+    ? rawPath.map(wp => ({
+        x: Math.round(wp.x * VIEWPORT.width),
+        y: Math.round(wp.y * VIEWPORT.height),
+      }))
+    : undefined;
 
   const page = session.page;
   const px = Math.round(x * VIEWPORT.width);
@@ -336,6 +349,7 @@ router.post("/record/session/:id/click", async (req, res) => {
       selector: info?.selector ?? "",
       label: info?.label ?? "",
       ...(newUrl !== prevUrl ? { navigatedTo: newUrl } : {}),
+      ...(scaledPath ? { mousePath: scaledPath } : {}),
     };
     session.steps.push(step);
     res.json({ step, url: newUrl, tabCount: session.tabs.length });
@@ -361,25 +375,28 @@ router.post("/record/session/:id/step", async (req, res) => {
     switch (step.type) {
       case "click":
         await page.waitForSelector(step.selector!, { timeout: 8000 });
-        await humanClick(page, step.selector!);
+        await humanClick(page, step.selector!, { mousePath: step.mousePath });
         await page.waitForTimeout(step.waitMs ?? 1000);
         break;
 
       case "doubleclick":
         await page.waitForSelector(step.selector!, { timeout: 8000 });
-        await humanDoubleClick(page, step.selector!);
+        await humanDoubleClick(page, step.selector!, { mousePath: step.mousePath });
         await page.waitForTimeout(step.waitMs ?? 500);
         break;
 
       case "rightclick":
         await page.waitForSelector(step.selector!, { timeout: 8000 });
-        await humanRightClick(page, step.selector!);
+        await humanRightClick(page, step.selector!, { mousePath: step.mousePath });
         await page.waitForTimeout(step.waitMs ?? 500);
         break;
 
       case "type":
         await page.waitForSelector(step.selector!, { timeout: 8000 });
-        await humanType(page, step.selector!, rv(step.text ?? ""));
+        await humanType(page, step.selector!, rv(step.text ?? ""), {
+          keyDelays: step.keyDelays,
+          mousePath: step.mousePath,
+        });
         await page.waitForTimeout(step.waitMs ?? 300);
         break;
 

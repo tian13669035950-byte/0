@@ -18,6 +18,8 @@ const CustomSelectorSchema = z.object({
   selector: z.string(),
 });
 
+const MouseWaypointSchema = z.object({ x: z.number(), y: z.number() });
+
 const ScrapeStepSchema = z.object({
   type: z.enum(["click", "listen", "type", "key", "select", "scroll", "hover", "navigate", "capture", "goback", "goforward", "reload", "wait", "screenshot", "rightclick", "doubleclick", "newtab", "switchtab", "closetab", "waitforvar"]),
   selector: z.string().optional(),
@@ -33,6 +35,10 @@ const ScrapeStepSchema = z.object({
   varName: z.string().optional(),
   incognito: z.boolean().nullish(),
   tabIndex: z.number().nullish(),
+  /** Inter-keystroke delays (ms) recorded from the user's real typing for type steps */
+  keyDelays: z.array(z.number()).nullish(),
+  /** Mouse-path waypoints (pixel coords) recorded from the user's real cursor movement */
+  mousePath: z.array(MouseWaypointSchema).nullish(),
 });
 
 const ScrapeOptionsSchema = z.object({
@@ -204,17 +210,18 @@ async function runScrapeSession(
         const selector = step.selector.trim();
         try {
           await page.waitForSelector(selector, { timeout: 8000 });
+          const clickOpts = { mousePath: step.mousePath ?? undefined };
           if (step.waitForPopupClose) {
             const popupTimeout = step.popupTimeoutMs ?? 30000;
             const popupPromise = page.context().waitForEvent("page", { timeout: popupTimeout });
-            await humanClick(page, selector);
+            await humanClick(page, selector, clickOpts);
             clickedElement = selector;
             try {
               const popup = await popupPromise;
               await popup.waitForEvent("close", { timeout: popupTimeout });
             } catch { ok = false; }
           } else {
-            await humanClick(page, selector);
+            await humanClick(page, selector, clickOpts);
             clickedElement = selector;
           }
           if (step.waitMs) await page.waitForTimeout(step.waitMs);
@@ -294,7 +301,10 @@ async function runScrapeSession(
         const selector = step.selector.trim();
         try {
           await page.waitForSelector(selector, { timeout: 8000 });
-          await humanType(page, selector, resolveVars(step.text));
+          await humanType(page, selector, resolveVars(step.text), {
+            keyDelays: step.keyDelays ?? undefined,
+            mousePath: step.mousePath ?? undefined,
+          });
           if (step.waitMs) await page.waitForTimeout(step.waitMs);
         } catch { ok = false; }
 
@@ -360,7 +370,7 @@ async function runScrapeSession(
         const selector = step.selector.trim();
         try {
           await page.waitForSelector(selector, { timeout: 8000 });
-          await humanRightClick(page, selector);
+          await humanRightClick(page, selector, { mousePath: step.mousePath ?? undefined });
           if (step.waitMs) await page.waitForTimeout(step.waitMs);
         } catch { ok = false; }
 
@@ -368,7 +378,7 @@ async function runScrapeSession(
         const selector = step.selector.trim();
         try {
           await page.waitForSelector(selector, { timeout: 8000 });
-          await humanDoubleClick(page, selector);
+          await humanDoubleClick(page, selector, { mousePath: step.mousePath ?? undefined });
           if (step.waitMs) await page.waitForTimeout(step.waitMs);
         } catch { ok = false; }
 

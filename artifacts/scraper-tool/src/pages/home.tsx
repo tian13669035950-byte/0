@@ -42,6 +42,10 @@ type RecordedStep = {
   incognito?: boolean;
   label?: string;
   navigatedTo?: string;
+  /** Inter-keystroke delays captured while the user typed in the recorder form */
+  keyDelays?: number[];
+  /** Pixel-coord mouse path captured from the overlay before the user clicked */
+  mousePath?: { x: number; y: number }[];
 };
 
 // ─── Step definitions ────────────────────────────────────────────────────────
@@ -107,6 +111,10 @@ const stepSchema = z.object({
   varName: z.string().optional(),
   incognito: z.boolean().optional(),
   tabIndex: z.number().optional(),
+  /** Inter-keystroke delays (ms) captured from real typing for anti-detection replay */
+  keyDelays: z.array(z.number()).optional(),
+  /** Mouse-path waypoints (viewport px coords) recorded from real cursor movement */
+  mousePath: z.array(z.object({ x: z.number(), y: z.number() })).optional(),
 });
 
 type Step = z.infer<typeof stepSchema>;
@@ -237,6 +245,18 @@ export default function Home() {
   const overlayRef = useRef<HTMLDivElement>(null);
   const esRef = useRef<EventSource | null>(null);
   const recStepIdRef = useRef(0);
+
+  // ── Behavior-recording refs (mouse path + keystroke timing) ──────────────
+  /** Normalised (0-1) mouse waypoints sampled during the last cursor movement */
+  const recMousePathRef = useRef<{ x: number; y: number; t: number }[]>([]);
+  /** Last sample timestamp — used to throttle onMouseMove to ~20 Hz */
+  const recLastMouseSampleRef = useRef<number>(0);
+  /** Last keydown timestamp for the recorder's text input */
+  const recTextLastKeyRef = useRef<number | null>(null);
+  /** Accumulated inter-keystroke delays for the recorder's text input (state for UI reactivity) */
+  const [recTextDelays, setRecTextDelays] = useState<number[]>([]);
+  /** Per-step keystroke timing: fieldId → { lastTime, delays } */
+  const stepKeyTimingRef = useRef<Map<string, { lastTime: number | null; delays: number[] }>>(new Map());
 
   const form = useForm<FormValues>({
     resolver: zodResolver(formSchema),
@@ -484,11 +504,16 @@ export default function Home() {
   const sendClickAtCoords = useCallback(async (action: ClickPickType, x: number, y: number) => {
     if (!sessionId) return;
     setRecStepPending(true);
+    // Grab and reset the accumulated mouse path (normalised 0-1 coords)
+    const mousePath = recMousePathRef.current.length >= 3
+      ? recMousePathRef.current.map(p => ({ x: p.x, y: p.y }))
+      : undefined;
+    recMousePathRef.current = [];
     try {
       const resp = await fetch(`/api/record/session/${sessionId}/click`, {
         method: "POST",
         headers: { "Content-Type": "application/json" },
-        body: JSON.stringify({ action, x, y }),
+        body: JSON.stringify({ action, x, y, mousePath }),
       });
       if (!resp.ok) throw new Error(`HTTP ${resp.status}`);
       const result = await resp.json() as { step: RecordedStep; url: string; tabCount: number };
@@ -905,12 +930,43 @@ export default function Home() {
                               <Input placeholder="例：#username 或 input[name=email]" className="font-mono text-xs h-7"
                                 {...form.register(`steps.${index}.selector`)} />
                             </Field>
-                            <Field label="要输入的文字">
-                              <Input placeholder='例：hello@example.com 或 ${邮箱}' className="text-xs h-7"
-                                {...form.register(`steps.${index}.text`)} />
+                            <Field label={
+                              <span className="flex items-center gap-1.5">
+                                要输入的文字
+                                {(watchedSteps[index]?.keyDelays?.length ?? 0) > 0 && (
+                                  <span className="flex items-center gap-0.5 text-emerald-600 text-[10px] font-normal">
+                                    <Clock className="h-2.5 w-2.5" />已录制时序
+                                  </span>
+                                )}
+                              </span>
+                            }>
+                              <Input
+                                placeholder='在此按你的节奏输入 → 自动录制时序，或填 ${邮箱}'
+                                className="text-xs h-7"
+                                {...form.register(`steps.${index}.text`)}
+                                onFocus={() => {
+                                  stepKeyTimingRef.current.set(field.id, { lastTime: null, delays: [] });
+                                }}
+                                onKeyDown={(e) => {
+                                  if (e.key.length !== 1) return;
+                                  const now = Date.now();
+                                  const timing = stepKeyTimingRef.current.get(field.id);
+                                  if (!timing) return;
+                                  if (timing.lastTime !== null) {
+                                    timing.delays.push(now - timing.lastTime);
+                                  }
+                                  timing.lastTime = now;
+                                }}
+                                onBlur={() => {
+                                  const timing = stepKeyTimingRef.current.get(field.id);
+                                  if (timing && timing.delays.length > 1) {
+                                    form.setValue(`steps.${index}.keyDelays`, [...timing.delays]);
+                                  }
+                                }}
+                              />
                             </Field>
                             <p className="text-xs text-muted-foreground bg-green-50 border border-green-200 rounded px-2 py-1.5">
-                              用 <code className="font-mono">{"${变量名}"}</code> 引用"读取保存"步骤里存的值
+                              在框内按你的真实节奏打字，时序自动录制；用 <code className="font-mono">{"${变量名}"}</code> 引用"读取保存"步骤里存的值
                             </p>
                           </>}
 
@@ -1567,7 +1623,12 @@ export default function Home() {
           if (!url) { toast({ title: "请填写网址", variant: "destructive" }); return null; }
           base.url = url;
         }
-        if (needsText) base.text = String(fv.text ?? "");
+        if (needsText) {
+          base.text = String(fv.text ?? "");
+          if (recTextDelays.length > 0) {
+            base.keyDelays = [...recTextDelays];
+          }
+        }
         if (needsKey) base.key = String(fv.key ?? "Enter");
         if (needsValue) base.value = String(fv.value ?? "");
         if (needsTabIndex) base.tabIndex = Number(fv.tabIndex ?? 0);
@@ -1656,6 +1717,23 @@ export default function Home() {
                     <div
                       ref={overlayRef}
                       className={`absolute inset-0 ${overlayClickable ? "cursor-crosshair" : ""}`}
+                      onMouseMove={overlayClickable ? (e) => {
+                        const now = Date.now();
+                        if (now - recLastMouseSampleRef.current < 50) return; // ~20 Hz
+                        recLastMouseSampleRef.current = now;
+                        const rect = overlayRef.current?.getBoundingClientRect();
+                        if (!rect) return;
+                        recMousePathRef.current.push({
+                          x: (e.clientX - rect.left) / rect.width,
+                          y: (e.clientY - rect.top) / rect.height,
+                          t: now,
+                        });
+                        // Keep only last 3 s of movement, max 40 waypoints
+                        const cutoff = now - 3000;
+                        recMousePathRef.current = recMousePathRef.current
+                          .filter(p => p.t >= cutoff)
+                          .slice(-40);
+                      } : undefined}
                       onClick={overlayClickable ? (e) => {
                         const rect = overlayRef.current?.getBoundingClientRect();
                         if (!rect) return;
@@ -1665,6 +1743,7 @@ export default function Home() {
                           sendClickAtCoords(recFormType as "click"|"doubleclick"|"rightclick"|"hover", x, y);
                         } else if (pickPhase1) {
                           detectSelectorAtCoords(x, y);
+                          recMousePathRef.current = []; // reset path after pick
                         }
                       } : undefined}
                     />
@@ -1863,14 +1942,38 @@ export default function Home() {
                     )}
                     {needsText && (
                       <div>
-                        <label className="text-[10px] text-zinc-400 block mb-0.5">输入内容</label>
+                        <label className="text-[10px] text-zinc-400 flex items-center gap-1.5 mb-0.5">
+                          输入内容
+                          {recTextDelays.length > 0 && (
+                            <span className="flex items-center gap-0.5 text-emerald-400 text-[10px]">
+                              <Clock className="h-2.5 w-2.5" />
+                              已录制时序（{recTextDelays.length} 键）
+                            </span>
+                          )}
+                        </label>
                         <input
                           type="text"
                           value={String(fv.text ?? "")}
-                          onChange={e => setFv("text", e.target.value)}
                           placeholder="要输入的文字，支持 ${变量名}"
-                          className="w-full px-2 py-1 text-xs rounded bg-zinc-800 text-zinc-100 border border-zinc-600 placeholder:text-zinc-500 focus:outline-none focus:border-blue-500"
+                          className="w-full px-2 py-1 text-xs rounded bg-zinc-800 text-zinc-100 border border-zinc-600 placeholder:text-zinc-500 focus:outline-none focus:border-emerald-500"
+                          onFocus={() => {
+                            recTextLastKeyRef.current = null;
+                            setRecTextDelays([]);
+                          }}
+                          onKeyDown={(e) => {
+                            if (e.key.length !== 1) return;
+                            const now = Date.now();
+                            if (recTextLastKeyRef.current !== null) {
+                              const gap = now - recTextLastKeyRef.current;
+                              setRecTextDelays(prev => [...prev, gap]);
+                            }
+                            recTextLastKeyRef.current = now;
+                          }}
+                          onChange={e => {
+                            setFv("text", e.target.value);
+                          }}
                         />
+                        <p className="text-[9px] text-zinc-500 mt-0.5">在此输入 → 自动录制你的打字节奏，回放时原样模仿</p>
                       </div>
                     )}
                     {needsKey && (
@@ -2098,7 +2201,7 @@ export default function Home() {
   );
 }
 
-function Field({ label, children }: { label: string; children: React.ReactNode }) {
+function Field({ label, children }: { label: React.ReactNode; children: React.ReactNode }) {
   return (
     <div className="space-y-1">
       <p className="text-xs text-muted-foreground">{label}</p>
