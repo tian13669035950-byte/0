@@ -280,6 +280,15 @@ export default function Home() {
   // ── Recorder: import existing steps ──────────────────────────────────────
   const [recImportOpen, setRecImportOpen] = useState(false);
 
+  // ── Recorder: inline step editing ────────────────────────────────────────
+  const [editingRecIdx, setEditingRecIdx] = useState<number | null>(null);
+  const [editingRecValues, setEditingRecValues] = useState<Partial<RecordedStep>>({});
+  const setEv = (k: string, v: unknown) => setEditingRecValues(prev => ({ ...prev, [k]: v }));
+
+  // ── Recorder: free navigate (navigate without recording) ─────────────────
+  const [freeNavUrl, setFreeNavUrl] = useState("");
+  const [freeNavPending, setFreeNavPending] = useState(false);
+
   const form = useForm<FormValues>({
     resolver: zodResolver(formSchema),
     defaultValues: {
@@ -622,6 +631,33 @@ export default function Home() {
     stopRecording();
     toast({ title: `已添加 ${recordedSteps.length} 个步骤`, description: "可在左侧步骤列表中查看和调整" });
   }, [recordedSteps, appendStep, stopRecording, toast]);
+
+  const saveEditedRecStep = useCallback((idx: number) => {
+    setRecordedSteps(s => s.map((step, i) => i === idx ? { ...step, ...editingRecValues } : step));
+    setEditingRecIdx(null);
+    setEditingRecValues({});
+  }, [editingRecValues]);
+
+  const sendFreeNavigate = useCallback(async () => {
+    if (!sessionId || !freeNavUrl.trim()) return;
+    setFreeNavPending(true);
+    try {
+      const url = freeNavUrl.trim().startsWith("http") ? freeNavUrl.trim() : `https://${freeNavUrl.trim()}`;
+      const resp = await fetch(`/api/record/session/${sessionId}/step`, {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({ type: "navigate", url, waitMs: 1500 }),
+      });
+      if (!resp.ok) throw new Error(`HTTP ${resp.status}`);
+      const result = await resp.json() as { ok: boolean; url: string };
+      if (result.url) setSessionCurrentUrl(result.url);
+      // Intentionally NOT adding to recordedSteps — this is "free navigation"
+    } catch (err) {
+      toast({ title: "导航失败", description: String(err), variant: "destructive" });
+    } finally {
+      setFreeNavPending(false);
+    }
+  }, [sessionId, freeNavUrl, toast]);
 
   // ── Live watch helpers ────────────────────────────────────────────────────
 
@@ -1900,6 +1936,27 @@ export default function Home() {
 
               {/* Step palette + mini-form */}
               <div className="shrink-0 bg-zinc-900 border-t border-zinc-700">
+                {/* Free-navigate bar — navigate the live browser without recording a step */}
+                <div className="px-2 py-1.5 border-b border-zinc-700/60 flex items-center gap-1.5">
+                  <Globe className="h-3 w-3 text-zinc-500 shrink-0" />
+                  <input
+                    value={freeNavUrl}
+                    onChange={e => setFreeNavUrl(e.target.value)}
+                    onKeyDown={e => e.key === "Enter" && sendFreeNavigate()}
+                    placeholder="自由跳转网址（不录入步骤）"
+                    className="flex-1 min-w-0 px-2 py-0.5 text-[11px] rounded bg-zinc-800 text-zinc-100 border border-zinc-700 placeholder:text-zinc-500 focus:outline-none focus:border-zinc-500 font-mono"
+                  />
+                  <button
+                    type="button"
+                    onClick={sendFreeNavigate}
+                    disabled={freeNavPending || !freeNavUrl.trim()}
+                    className="shrink-0 px-2 py-0.5 rounded text-[10px] bg-zinc-700 text-zinc-200 border border-zinc-600 hover:bg-zinc-600 disabled:opacity-40 transition-colors flex items-center gap-1"
+                  >
+                    {freeNavPending ? <Loader2 className="h-3 w-3 animate-spin" /> : <ChevronRight className="h-3 w-3" />}
+                    跳转
+                  </button>
+                </div>
+
                 {/* Palette header */}
                 <div className="px-3 pt-2 pb-1 flex items-center justify-between">
                   <span className="text-[10px] text-zinc-400 font-semibold uppercase tracking-wide">选择操作</span>
@@ -2340,26 +2397,160 @@ export default function Home() {
                           const colors = COLOR_MAP[def.color];
                           const Icon = def.icon;
                           const summary = rs.selector ?? rs.url ?? rs.text ?? rs.key ?? rs.value ?? (rs.tabIndex !== undefined ? `标签 ${rs.tabIndex}` : "");
+                          const isEditing = editingRecIdx === i;
                           return (
-                            <div key={rs.id} className={`rounded-md border p-2 ${colors.bg} ${colors.border} animate-in slide-in-from-bottom-1`}>
-                              <div className="flex items-center gap-1.5 mb-0.5">
+                            <div key={rs.id} className={`rounded-md border ${colors.bg} ${colors.border} animate-in slide-in-from-bottom-1 ${isEditing ? "ring-1 ring-primary/50" : ""}`}>
+                              {/* Header row — click to toggle edit */}
+                              <button
+                                type="button"
+                                className="w-full text-left p-2 flex items-center gap-1.5"
+                                onClick={() => {
+                                  if (isEditing) { setEditingRecIdx(null); setEditingRecValues({}); }
+                                  else { setEditingRecIdx(i); setEditingRecValues({}); }
+                                }}
+                              >
                                 <span className="text-[10px] font-mono text-muted-foreground w-4 shrink-0">{i + 1}</span>
                                 <Icon className="h-3 w-3 shrink-0 text-foreground/60" />
-                                <span className="text-xs font-semibold">{def.label}</span>
-                                {rs.navigatedTo && <span className="text-[10px] text-indigo-500 shrink-0">→ 跳页</span>}
-                                <button type="button" className="ml-auto shrink-0 text-muted-foreground/40 hover:text-red-400 transition-colors"
+                                <span className="text-xs font-semibold flex-1 text-left">{def.label}</span>
+                                {rs.navigatedTo && <span className="text-[10px] text-indigo-500 shrink-0">→跳页</span>}
+                                <span className={`text-[9px] shrink-0 transition-colors ${isEditing ? "text-primary" : "text-muted-foreground/30 hover:text-muted-foreground"}`}>
+                                  {isEditing ? "▲" : "✎"}
+                                </span>
+                                <button type="button" className="shrink-0 text-muted-foreground/30 hover:text-red-400 transition-colors ml-0.5"
                                   title="删除此步骤"
-                                  onClick={() => setRecordedSteps(s => s.filter((_, si) => si !== i))}>
+                                  onClick={(e) => { e.stopPropagation(); setRecordedSteps(s => s.filter((_, si) => si !== i)); if (editingRecIdx === i) setEditingRecIdx(null); }}>
                                   <X className="h-2.5 w-2.5" />
                                 </button>
-                              </div>
-                              {summary && (
-                                <code className="text-[10px] font-mono text-foreground/60 break-all leading-tight block ml-5 truncate">
-                                  {summary}
-                                </code>
+                              </button>
+
+                              {/* Summary (non-editing) */}
+                              {!isEditing && summary && (
+                                <div className="px-2 pb-2 -mt-0.5">
+                                  <code className="text-[10px] font-mono text-foreground/55 break-all leading-snug block ml-5">
+                                    {summary}
+                                  </code>
+                                  {rs.label && <span className="text-[10px] text-muted-foreground ml-5 block">"{rs.label}"</span>}
+                                </div>
                               )}
-                              {rs.label && (
-                                <span className="text-[10px] text-muted-foreground ml-5 block truncate">"{rs.label}"</span>
+
+                              {/* Inline edit form */}
+                              {isEditing && (
+                                <div className="border-t border-current/10 bg-background/80 px-2 pb-2 pt-1.5 space-y-1.5">
+                                  {/* Selector */}
+                                  {["click","doubleclick","rightclick","hover","scroll","type","select","capture","listen","gotoif"].includes(rs.type) && (
+                                    <div>
+                                      <label className="text-[9px] text-muted-foreground uppercase tracking-wide block mb-0.5">选择器</label>
+                                      <input className="w-full px-1.5 py-0.5 text-[11px] font-mono rounded border bg-background focus:outline-none focus:ring-1 focus:ring-primary/40"
+                                        value={String(editingRecValues.selector ?? rs.selector ?? "")}
+                                        onChange={e => setEv("selector", e.target.value)} />
+                                    </div>
+                                  )}
+                                  {/* URL */}
+                                  {["navigate","newtab"].includes(rs.type) && (
+                                    <div>
+                                      <label className="text-[9px] text-muted-foreground uppercase tracking-wide block mb-0.5">网址</label>
+                                      <input className="w-full px-1.5 py-0.5 text-[11px] font-mono rounded border bg-background focus:outline-none focus:ring-1 focus:ring-primary/40"
+                                        value={String(editingRecValues.url ?? rs.url ?? "")}
+                                        onChange={e => setEv("url", e.target.value)} />
+                                    </div>
+                                  )}
+                                  {/* Text */}
+                                  {rs.type === "type" && (
+                                    <div>
+                                      <label className="text-[9px] text-muted-foreground uppercase tracking-wide block mb-0.5">输入内容</label>
+                                      <input className="w-full px-1.5 py-0.5 text-[11px] rounded border bg-background focus:outline-none focus:ring-1 focus:ring-primary/40"
+                                        value={String(editingRecValues.text ?? rs.text ?? "")}
+                                        onChange={e => setEv("text", e.target.value)} />
+                                    </div>
+                                  )}
+                                  {/* Value (select) */}
+                                  {rs.type === "select" && (
+                                    <div>
+                                      <label className="text-[9px] text-muted-foreground uppercase tracking-wide block mb-0.5">选项值</label>
+                                      <input className="w-full px-1.5 py-0.5 text-[11px] font-mono rounded border bg-background focus:outline-none focus:ring-1 focus:ring-primary/40"
+                                        value={String(editingRecValues.value ?? rs.value ?? "")}
+                                        onChange={e => setEv("value", e.target.value)} />
+                                    </div>
+                                  )}
+                                  {/* Key */}
+                                  {rs.type === "key" && (
+                                    <div>
+                                      <label className="text-[9px] text-muted-foreground uppercase tracking-wide block mb-0.5">按键</label>
+                                      <input className="w-full px-1.5 py-0.5 text-[11px] font-mono rounded border bg-background focus:outline-none focus:ring-1 focus:ring-primary/40"
+                                        value={String(editingRecValues.key ?? rs.key ?? "")}
+                                        onChange={e => setEv("key", e.target.value)} />
+                                    </div>
+                                  )}
+                                  {/* VarName */}
+                                  {["capture","waitforvar"].includes(rs.type) && (
+                                    <div>
+                                      <label className="text-[9px] text-muted-foreground uppercase tracking-wide block mb-0.5">变量名</label>
+                                      <input className="w-full px-1.5 py-0.5 text-[11px] font-mono rounded border bg-background focus:outline-none focus:ring-1 focus:ring-primary/40"
+                                        value={String(editingRecValues.varName ?? rs.varName ?? "")}
+                                        onChange={e => setEv("varName", e.target.value)} />
+                                    </div>
+                                  )}
+                                  {/* listenFor */}
+                                  {["listen","gotoif"].includes(rs.type) && (
+                                    <div>
+                                      <label className="text-[9px] text-muted-foreground uppercase tracking-wide block mb-0.5">条件</label>
+                                      <select className="w-full px-1.5 py-0.5 text-[11px] rounded border bg-background focus:outline-none"
+                                        value={String(editingRecValues.listenFor ?? rs.listenFor ?? "appear")}
+                                        onChange={e => setEv("listenFor", e.target.value)}>
+                                        <option value="appear">元素出现</option>
+                                        <option value="disappear">元素消失</option>
+                                        {rs.type === "listen" && <option value="networkIdle">网络空闲</option>}
+                                      </select>
+                                    </div>
+                                  )}
+                                  {/* WaitMs */}
+                                  {!["listen","capture","gotoif","waitforvar"].includes(rs.type) && (
+                                    <div>
+                                      <label className="text-[9px] text-muted-foreground uppercase tracking-wide block mb-0.5">等待 ms</label>
+                                      <input type="number" className="w-full px-1.5 py-0.5 text-[11px] font-mono rounded border bg-background focus:outline-none focus:ring-1 focus:ring-primary/40"
+                                        value={String(editingRecValues.waitMs ?? rs.waitMs ?? "")}
+                                        onChange={e => setEv("waitMs", Number(e.target.value))} />
+                                    </div>
+                                  )}
+                                  {/* gotoif extras */}
+                                  {rs.type === "gotoif" && (
+                                    <div className="flex gap-1.5">
+                                      <div className="flex-1">
+                                        <label className="text-[9px] text-muted-foreground uppercase tracking-wide block mb-0.5">跳回步骤</label>
+                                        <input type="number" min={1} className="w-full px-1.5 py-0.5 text-[11px] font-mono rounded border bg-background focus:outline-none"
+                                          value={String(editingRecValues.targetStep ?? rs.targetStep ?? 1)}
+                                          onChange={e => setEv("targetStep", Number(e.target.value))} />
+                                      </div>
+                                      <div className="flex-1">
+                                        <label className="text-[9px] text-muted-foreground uppercase tracking-wide block mb-0.5">最多重试</label>
+                                        <input type="number" min={1} max={20} className="w-full px-1.5 py-0.5 text-[11px] font-mono rounded border bg-background focus:outline-none"
+                                          value={String(editingRecValues.maxRetries ?? rs.maxRetries ?? 3)}
+                                          onChange={e => setEv("maxRetries", Number(e.target.value))} />
+                                      </div>
+                                    </div>
+                                  )}
+                                  {/* TabIndex */}
+                                  {rs.type === "switchtab" && (
+                                    <div>
+                                      <label className="text-[9px] text-muted-foreground uppercase tracking-wide block mb-0.5">标签页编号</label>
+                                      <input type="number" min={0} className="w-full px-1.5 py-0.5 text-[11px] font-mono rounded border bg-background focus:outline-none"
+                                        value={String(editingRecValues.tabIndex ?? rs.tabIndex ?? 0)}
+                                        onChange={e => setEv("tabIndex", Number(e.target.value))} />
+                                    </div>
+                                  )}
+                                  <div className="flex gap-1 pt-0.5">
+                                    <button type="button"
+                                      className="flex-1 py-1 rounded text-[10px] font-semibold bg-primary text-primary-foreground hover:bg-primary/90 transition-colors"
+                                      onClick={() => saveEditedRecStep(i)}>
+                                      ✓ 保存
+                                    </button>
+                                    <button type="button"
+                                      className="px-2 py-1 rounded text-[10px] text-muted-foreground border hover:bg-muted transition-colors"
+                                      onClick={() => { setEditingRecIdx(null); setEditingRecValues({}); }}>
+                                      取消
+                                    </button>
+                                  </div>
+                                </div>
                               )}
                             </div>
                           );
