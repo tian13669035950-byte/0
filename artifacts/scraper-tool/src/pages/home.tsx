@@ -243,6 +243,9 @@ export default function Home() {
 
   // ── Recorder state ────────────────────────────────────────────────────────
   const [isRecording, setIsRecording] = useState(false);
+  const [recPaused, setRecPaused] = useState(false);
+  /** Ref mirror — lets sendStep / sendClickAtCoords read the current value without stale-closure issues */
+  const recPausedRef = useRef(false);
   const [recordedSteps, setRecordedSteps] = useState<RecordedStep[]>([]);
   const [sessionId, setSessionId] = useState<string | null>(null);
   const [screenshotUrl, setScreenshotUrl] = useState("");
@@ -464,6 +467,8 @@ export default function Home() {
     }
     if (esRef.current) { esRef.current.close(); esRef.current = null; }
     setIsRecording(false);
+    recPausedRef.current = false;
+    setRecPaused(false);
     setSessionId(null);
     setScreenshotUrl("");
     setSessionCurrentUrl("");
@@ -549,7 +554,7 @@ export default function Home() {
       if (!resp.ok) throw new Error(`HTTP ${resp.status}`);
       const result = await resp.json() as { step: RecordedStep; url: string; tabCount: number };
       const newId = String(++recStepIdRef.current);
-      setRecordedSteps(s => [...s, { id: newId, ...result.step }]);
+      if (!recPausedRef.current) setRecordedSteps(s => [...s, { id: newId, ...result.step }]);
       if (result.url) setSessionCurrentUrl(result.url);
       if (result.tabCount) setRecTabCount(result.tabCount);
       // Keep the same action selected so user can keep clicking more elements
@@ -596,7 +601,7 @@ export default function Home() {
       if (!resp.ok) throw new Error(`HTTP ${resp.status}`);
       const result = await resp.json() as { ok: boolean; step: RecordedStep; url: string; tabCount: number; vars?: Record<string, string> };
       const newId = String(++recStepIdRef.current);
-      setRecordedSteps((s) => [...s, { id: newId, ...result.step }]);
+      if (!recPausedRef.current) setRecordedSteps((s) => [...s, { id: newId, ...result.step }]);
       if (result.url) setSessionCurrentUrl(result.url);
       if (result.tabCount) setRecTabCount(result.tabCount);
       if (result.vars) setRecVars(result.vars);
@@ -1797,12 +1802,24 @@ export default function Home() {
         <div className="fixed inset-0 z-50 flex flex-col bg-background/95 backdrop-blur-sm animate-in fade-in">
           {/* Top bar */}
           <div className="flex items-center gap-2 px-3 sm:px-4 py-2.5 sm:py-3 border-b bg-background shadow-sm shrink-0">
+            {/* Recording / Paused indicator */}
             <div className="flex items-center gap-1.5 shrink-0">
-              <span className="relative flex h-2.5 w-2.5">
-                <span className="animate-ping absolute inline-flex h-full w-full rounded-full bg-red-400 opacity-75" />
-                <span className="relative inline-flex rounded-full h-2.5 w-2.5 bg-red-500" />
-              </span>
-              <span className="text-xs sm:text-sm font-semibold text-red-600">录制中</span>
+              {recPaused ? (
+                <>
+                  <span className="relative flex h-2.5 w-2.5">
+                    <span className="relative inline-flex rounded-full h-2.5 w-2.5 bg-amber-400" />
+                  </span>
+                  <span className="text-xs sm:text-sm font-semibold text-amber-500">已暂停</span>
+                </>
+              ) : (
+                <>
+                  <span className="relative flex h-2.5 w-2.5">
+                    <span className="animate-ping absolute inline-flex h-full w-full rounded-full bg-red-400 opacity-75" />
+                    <span className="relative inline-flex rounded-full h-2.5 w-2.5 bg-red-500" />
+                  </span>
+                  <span className="text-xs sm:text-sm font-semibold text-red-600">录制中</span>
+                </>
+              )}
             </div>
             <div className="flex-1 flex items-center gap-1.5 min-w-0">
               <Link2 className="h-3 w-3 text-muted-foreground shrink-0 hidden sm:block" />
@@ -1824,6 +1841,24 @@ export default function Home() {
             <Button type="button" variant="ghost" size="sm" className="h-7 w-7 p-0 sm:w-auto sm:px-3 sm:gap-1.5 text-muted-foreground shrink-0"
               title="重新连接画面" onClick={() => { if (sessionId) connectStream(sessionId); }}>
               <RefreshCw className="h-4 w-4" /><span className="hidden sm:inline">刷新画面</span>
+            </Button>
+            {/* Pause / Resume toggle — keeps browser alive, just stops recording steps */}
+            <Button
+              type="button"
+              variant={recPaused ? "default" : "outline"}
+              size="sm"
+              className={`h-7 px-2 sm:px-3 gap-1.5 shrink-0 text-xs font-semibold transition-colors ${recPaused ? "bg-amber-500 hover:bg-amber-400 text-white border-amber-500" : "border-amber-400 text-amber-600 hover:bg-amber-50"}`}
+              title={recPaused ? "继续录制步骤" : "暂停录制（浏览器继续运行，操作不会被记录）"}
+              onClick={() => {
+                const next = !recPausedRef.current;
+                recPausedRef.current = next;
+                setRecPaused(next);
+              }}
+            >
+              {recPaused
+                ? <><Play className="h-3.5 w-3.5" /><span className="hidden sm:inline">继续录制</span></>
+                : <><Square className="h-3 w-3" /><span className="hidden sm:inline">暂停录制</span></>
+              }
             </Button>
             <Button type="button" variant="ghost" size="sm" className="h-7 w-7 p-0 sm:w-auto sm:px-3 sm:gap-1.5 text-muted-foreground shrink-0" onClick={() => stopRecording()}>
               <X className="h-4 w-4" /><span className="hidden sm:inline">关闭</span>
@@ -2350,6 +2385,14 @@ export default function Home() {
                   </Button>
                 </div>
               </div>
+
+              {/* Paused banner */}
+              {!panelCollapsed && recPaused && (
+                <div className="shrink-0 bg-amber-50 border-b border-amber-200 px-3 py-1.5 flex items-center gap-2">
+                  <span className="inline-block h-2 w-2 rounded-full bg-amber-400 shrink-0" />
+                  <span className="text-[11px] text-amber-700 font-medium">已暂停 — 浏览器继续运行，操作不录入步骤</span>
+                </div>
+              )}
 
               {/* Import dropdown */}
               {!panelCollapsed && recImportOpen && (
