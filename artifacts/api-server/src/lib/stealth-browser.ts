@@ -1,15 +1,51 @@
 import { chromium, BrowserContext, BrowserContextOptions } from "playwright-core";
 import { spawn, execSync } from "child_process";
+import fs from "fs";
 
 const NIX_CHROMIUM = "/nix/store/qa9cnw4v5xkxyip6mb9kxqfq1z4x2dx1-chromium-138.0.7204.100/bin/chromium";
 const NIX_XVFB    = "/nix/store/ykck7gdd6szwrb3qnpb5y5fvjlnmzhz0-xorg-server-21.1.18/bin/Xvfb";
 
-// Read lazily so dotenv has time to load before these are used
-const getChromiumPath = () => process.env.CHROMIUM_PATH || NIX_CHROMIUM;
-const getXvfbPath     = () => process.env.XVFB_PATH     || NIX_XVFB;
+const isWindows = process.platform === "win32";
+const isLinux   = process.platform === "linux";
+
+// Windows: search for Edge or Chrome in the standard install locations.
+// If none found, fall through to the first candidate so Playwright gives a helpful error.
+const WINDOWS_BROWSER_CANDIDATES = [
+  "C:\\Program Files (x86)\\Microsoft\\Edge\\Application\\msedge.exe",
+  "C:\\Program Files\\Microsoft\\Edge\\Application\\msedge.exe",
+  "C:\\Program Files\\Google\\Chrome\\Application\\chrome.exe",
+  "C:\\Program Files (x86)\\Google\\Chrome\\Application\\chrome.exe",
+];
+
+function findWindowsBrowser(): string {
+  for (const p of WINDOWS_BROWSER_CANDIDATES) {
+    try { if (fs.existsSync(p)) return p; } catch { /* skip */ }
+  }
+  // None found — return Edge path so Playwright reports a clear "not found" error
+  return WINDOWS_BROWSER_CANDIDATES[0];
+}
+
+// Read lazily so dotenv has time to load before these are used.
+// On Windows: auto-detect common Edge/Chrome paths when CHROMIUM_PATH is not set.
+const getChromiumPath = () => {
+  if (process.env.CHROMIUM_PATH) return process.env.CHROMIUM_PATH;
+  if (isWindows) return findWindowsBrowser();
+  return NIX_CHROMIUM;
+};
+
+const getXvfbPath = () => process.env.XVFB_PATH || NIX_XVFB;
 
 export const STEALTH_UA =
   "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/138.0.0.0 Safari/537.36";
+
+// These flags are meaningful only on Linux (sandbox / shared memory / display management).
+// Passing them on Windows is harmless for --disable-dev-shm-usage, but --no-sandbox and
+// --disable-setuid-sandbox can trigger "managed browser" warnings in some Edge builds.
+const LINUX_ONLY_ARGS = new Set([
+  "--no-sandbox",
+  "--disable-setuid-sandbox",
+  "--disable-dev-shm-usage",
+]);
 
 const LAUNCH_ARGS = [
   "--no-sandbox",
@@ -26,6 +62,11 @@ const LAUNCH_ARGS = [
   "--disable-backgrounding-occluded-windows",
   "--disable-renderer-backgrounding",
 ];
+
+// On Windows, strip the Linux-only flags before passing to Playwright.
+function getLaunchArgs(): string[] {
+  return isWindows ? LAUNCH_ARGS.filter(a => !LINUX_ONLY_ARGS.has(a)) : LAUNCH_ARGS;
+}
 
 // Script injected into every page before any JS runs —
 // patches all common automation-detection signals.
@@ -203,11 +244,7 @@ async function ensureXvfb(): Promise<string> {
 
 // ─── Browser launch ───────────────────────────────────────────────────────────
 
-const isLinux = process.platform === "linux";
-
 export async function launchStealthBrowser(headed = false) {
-  const extraArgs: string[] = [];
-
   if (headed) {
     // Xvfb is only needed on Linux (e.g. Replit / headless servers).
     // On Windows and macOS the machine has a real display — skip Xvfb entirely.
@@ -215,8 +252,6 @@ export async function launchStealthBrowser(headed = false) {
       const display = await ensureXvfb();
       process.env.DISPLAY = display;
     }
-  } else {
-    extraArgs.push("--disable-gpu");
   }
 
   // Note: --inprivate / --incognito flags are intentionally NOT passed here.
@@ -228,7 +263,7 @@ export async function launchStealthBrowser(headed = false) {
   return chromium.launch({
     headless: !headed,
     executablePath: getChromiumPath(),
-    args: [...LAUNCH_ARGS, ...extraArgs],
+    args: getLaunchArgs(),          // strips Linux-only flags on Windows
     env: headed ? { ...process.env } : undefined,
   });
 }
