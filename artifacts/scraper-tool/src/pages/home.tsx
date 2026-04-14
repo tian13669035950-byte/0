@@ -21,7 +21,7 @@ import {
   Keyboard, ListOrdered, Eye, MoveDown, Type, Activity,
   Video, StopCircle, Undo2, Link2, Download, Upload,
   RefreshCw, Camera, ChevronRight, MousePointer2, ArrowLeftRight, Shield,
-  Clipboard, RotateCcw,
+  Clipboard, RotateCcw, GripVertical, FileInput,
 } from "lucide-react";
 import type { ScrapeResult } from "@workspace/api-client-react/src/generated/api.schemas";
 import { addItemToStore, fromScrapeResult } from "@/lib/result-store";
@@ -272,6 +272,13 @@ export default function Home() {
   const [recTextDelays, setRecTextDelays] = useState<number[]>([]);
   /** Per-step keystroke timing: fieldId → { lastTime, delays } */
   const stepKeyTimingRef = useRef<Map<string, { lastTime: number | null; delays: number[] }>>(new Map());
+
+  // ── Step drag-to-reorder ──────────────────────────────────────────────────
+  const dragSrcRef = useRef<number | null>(null);
+  const [dragOverIdx, setDragOverIdx] = useState<number | null>(null);
+
+  // ── Recorder: import existing steps ──────────────────────────────────────
+  const [recImportOpen, setRecImportOpen] = useState(false);
 
   const form = useForm<FormValues>({
     resolver: zodResolver(formSchema),
@@ -815,9 +822,31 @@ export default function Home() {
                     const isPending = execProgress && !isActive && !isDone;
 
                     return (
-                      <div key={field.id} className={`border rounded-md overflow-hidden transition-all ${isActive ? "ring-2 ring-primary/40 shadow-sm" : ""}`}>
+                      <div
+                        key={field.id}
+                        draggable
+                        onDragStart={(e) => { e.dataTransfer.effectAllowed = "move"; dragSrcRef.current = index; setDragOverIdx(null); }}
+                        onDragEnter={() => setDragOverIdx(index)}
+                        onDragOver={(e) => e.preventDefault()}
+                        onDragEnd={() => { dragSrcRef.current = null; setDragOverIdx(null); }}
+                        onDrop={(e) => {
+                          e.preventDefault();
+                          if (dragSrcRef.current !== null && dragSrcRef.current !== index) {
+                            moveStep(dragSrcRef.current, index);
+                          }
+                          dragSrcRef.current = null;
+                          setDragOverIdx(null);
+                        }}
+                        className={`border rounded-md overflow-hidden transition-all
+                          ${isActive ? "ring-2 ring-primary/40 shadow-sm" : ""}
+                          ${dragOverIdx === index && dragSrcRef.current !== index ? "border-primary ring-1 ring-primary/40 scale-[1.01]" : ""}
+                          ${dragSrcRef.current === index ? "opacity-50" : ""}
+                        `}
+                      >
                         {/* Step header */}
                         <div className={`flex items-center gap-2 px-3 py-2 border-b ${isActive ? "bg-primary/10" : colors.bg}`}>
+                          {/* Drag handle */}
+                          <GripVertical className="h-4 w-4 text-muted-foreground/30 cursor-grab shrink-0 active:cursor-grabbing" />
                           <div className="flex flex-col gap-0.5 shrink-0">
                             <Button type="button" variant="ghost" size="icon" className="h-4 w-5 p-0" disabled={index === 0} onClick={() => moveStep(index, index - 1)}><ArrowUp className="h-3 w-3" /></Button>
                             <Button type="button" variant="ghost" size="icon" className="h-4 w-5 p-0" disabled={index === stepFields.length - 1} onClick={() => moveStep(index, index + 1)}><ArrowDown className="h-3 w-3" /></Button>
@@ -2242,8 +2271,16 @@ export default function Home() {
                   </div>
                 )}
                 <div className={`flex items-center gap-1 shrink-0 ${panelCollapsed ? "ml-auto" : ""}`}>
+                  {!panelCollapsed && (
+                    <Button type="button" variant="ghost" size="sm" className="h-6 px-1.5 text-xs text-muted-foreground"
+                      title="导入已有方案的步骤"
+                      onClick={() => setRecImportOpen(o => !o)}>
+                      <FileInput className="h-3 w-3" />
+                    </Button>
+                  )}
                   {!panelCollapsed && recordedSteps.length > 0 && (
                     <Button type="button" variant="ghost" size="sm" className="h-6 px-1.5 text-xs text-muted-foreground"
+                      title="撤销最后一步"
                       onClick={() => setRecordedSteps(s => s.slice(0, -1))}>
                       <Undo2 className="h-3 w-3" />
                     </Button>
@@ -2256,6 +2293,37 @@ export default function Home() {
                   </Button>
                 </div>
               </div>
+
+              {/* Import dropdown */}
+              {!panelCollapsed && recImportOpen && (
+                <div className="border-b bg-zinc-900 px-2 py-2 shrink-0">
+                  <p className="text-[10px] text-zinc-400 mb-1.5 font-medium">选择已保存方案，追加到当前步骤：</p>
+                  {savedSequences.length === 0 ? (
+                    <p className="text-[10px] text-zinc-500 italic">暂无已保存方案，先在步骤构建器中保存一个</p>
+                  ) : (
+                    <div className="space-y-0.5 max-h-36 overflow-y-auto pr-0.5">
+                      {savedSequences.map((seq) => (
+                        <button key={seq.name} type="button"
+                          className="w-full text-left px-2 py-1.5 text-[10px] rounded bg-zinc-800 hover:bg-zinc-700 text-zinc-200 flex items-center justify-between gap-2 transition-colors"
+                          onClick={() => {
+                            const newSteps: RecordedStep[] = seq.steps.map(step => ({
+                              id: String(++recStepIdRef.current),
+                              ...step,
+                            }));
+                            setRecordedSteps(prev => [...prev, ...newSteps]);
+                            setRecImportOpen(false);
+                            toast({ title: `已导入 "${seq.name}"`, description: `追加了 ${seq.steps.length} 个步骤，可在下方编辑` });
+                          }}>
+                          <span className="truncate">{seq.name}</span>
+                          <span className="text-zinc-500 shrink-0">{seq.steps.length} 步</span>
+                        </button>
+                      ))}
+                    </div>
+                  )}
+                  <button type="button" className="mt-1.5 text-[10px] text-zinc-500 hover:text-zinc-300 transition-colors"
+                    onClick={() => setRecImportOpen(false)}>关闭</button>
+                </div>
+              )}
 
               {!panelCollapsed && (
                 <>
@@ -2278,7 +2346,12 @@ export default function Home() {
                                 <span className="text-[10px] font-mono text-muted-foreground w-4 shrink-0">{i + 1}</span>
                                 <Icon className="h-3 w-3 shrink-0 text-foreground/60" />
                                 <span className="text-xs font-semibold">{def.label}</span>
-                                {rs.navigatedTo && <span className="text-[10px] text-indigo-500 ml-auto shrink-0">→ 跳页</span>}
+                                {rs.navigatedTo && <span className="text-[10px] text-indigo-500 shrink-0">→ 跳页</span>}
+                                <button type="button" className="ml-auto shrink-0 text-muted-foreground/40 hover:text-red-400 transition-colors"
+                                  title="删除此步骤"
+                                  onClick={() => setRecordedSteps(s => s.filter((_, si) => si !== i))}>
+                                  <X className="h-2.5 w-2.5" />
+                                </button>
                               </div>
                               {summary && (
                                 <code className="text-[10px] font-mono text-foreground/60 break-all leading-tight block ml-5 truncate">
